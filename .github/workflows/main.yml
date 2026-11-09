@@ -178,3 +178,36 @@ jobs:
           path: |
             app/build/linux/x64/release/bundle/
             core/target/release/cn_cal_cli
+
+  # UOS 20 实机体检（reports/uos-check-report.json）确认：glibc 2.28、x86_64、
+  # X11、libgtk-3/libGL/libX11 齐全、显卡硬件加速正常。唯一障碍是
+  # ubuntu-22.04 (glibc 2.35) 的动态产物会报 GLIBC_2.34 not found。
+  # 核心零外部依赖，用 musl 静态链接即可在任意 x86_64 Linux 上直接运行，
+  # 不需要在 UOS 上安装任何开发工具。
+  # 注意：这只解决「计算核心」，Flutter 界面 bundle 仍需在 glibc <= 2.28
+  # 环境构建并实机验证，不能以本 job 通过就断定界面可跑。
+  build-uos20-cli:
+    needs: data-and-core
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: musl 链接工具
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: 静态编译核心（UOS 20 可直接运行）
+        working-directory: core
+        run: cargo build --offline --release --bin cn_cal_cli --target x86_64-unknown-linux-musl
+      - name: 确认产物不依赖 glibc 且在 Linux 上算得对
+        run: |
+          BIN=core/target/x86_64-unknown-linux-musl/release/cn_cal_cli
+          file "$BIN"
+          ldd "$BIN" 2>&1 || true
+          "$BIN" day 2026-09-30 | grep -q '烈士纪念日'
+          "$BIN" verify weekday | grep -q '"consistent":true'
+          "$BIN" range
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cn_cal_cli-uos20-x64-static
+          path: core/target/x86_64-unknown-linux-musl/release/cn_cal_cli

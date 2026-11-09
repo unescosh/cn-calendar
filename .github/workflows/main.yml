@@ -253,6 +253,9 @@ jobs:
           '
       - name: 组装 UOS 包并核对 glibc 符号上限
         run: |
+          # 容器内以 root 写入 app/build，宿主 runner 用户需先取回所有权，
+          # 否则往 bundle 里放静态 cn_cal_cli 会报 Permission denied。
+          sudo chown -R "$(id -u):$(id -g)" app/build
           BUNDLE=app/build/linux/x64/release/bundle
           cp core/target/x86_64-unknown-linux-musl/release/cn_cal_cli "$BUNDLE/cn_cal_cli"
           chmod +x "$BUNDLE/cn_cal_cli"

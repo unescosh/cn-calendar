@@ -1,0 +1,12 @@
+Package: cn-calendar
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: libgtk-3-0, libgl1, libx11-6, libstdc++6, libgdk-pixbuf2.0-0
+Maintainer: cn-calendar project
+Homepage: https://github.com/unescosh/
+Description: 离线优先的中国桌面日历
+ 显示法定节假日、调休、二十四节气、农历与烈士纪念日等我国特色纪念日。
+ 无账号、无会员、无备忘录、无广告。日历数据内置，联网仅用于核对与
+ 同步年度调休安排。

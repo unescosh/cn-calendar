@@ -1,0 +1,16 @@
+# Flutter 3.22 在缺少本文件时会把 info 级问题也算作 analyze 失败。
+# 显式声明分析选项；CI 另加 --no-fatal-infos，避免 lint 噪音阻塞构建，
+# 但 error / warning 仍然会让 CI 变红。
+analyzer:
+  exclude:
+    - build/**
+    - '**/*.g.dart'
+  errors:
+    missing_required_param: error
+    missing_return: error
+
+linter:
+  rules:
+    - avoid_print
+    - prefer_const_constructors
+    - prefer_const_declarations

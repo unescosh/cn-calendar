@@ -1,0 +1,18 @@
+[package]
+name = "cn_cal_core"
+version = "0.1.0"
+edition = "2021"
+description = "中国桌面日历计算核心：农历、节气、法定纪念日、年度调休"
+license = "MIT"
+
+[lib]
+name = "cn_cal_core"
+path = "src/lib.rs"
+
+[dependencies]
+# 刻意保持零外部依赖：便于离线编译、交叉编译与老 glibc 系统部署。
+# JSON 解析由 src/json.rs 的最小实现承担。
+
+[profile.release]
+opt-level = 2
+strip = true

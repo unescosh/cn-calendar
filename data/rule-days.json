@@ -1,0 +1,27 @@
+{
+  "meta": {
+    "layer": "L2+L3",
+    "version": 1,
+    "description": "规则型纪念日与农历传统节日规则。全部本地计算，无需联网。"
+  },
+  "weekday_rules": [
+    { "name": "全民国防教育日", "month": 9, "weekday": 6, "nth": 3, "kind": "纪念日", "law": "《中华人民共和国国防教育法》" },
+    { "name": "全国助残日", "month": 5, "weekday": 0, "nth": 3, "kind": "主题日", "law": "《中华人民共和国残疾人保障法》" },
+    { "name": "文化和自然遗产日", "month": 6, "weekday": 6, "nth": 2, "kind": "主题日" }
+  ],
+  "solar_term_rules": [
+    { "name": "清明节", "term": "清明", "kind": "节日" },
+    { "name": "中国农民丰收节", "term": "秋分", "kind": "节日" }
+  ],
+  "lunar_festivals": [
+    { "name": "春节", "month": 1, "day": 1, "kind": "节日" },
+    { "name": "元宵节", "month": 1, "day": 15, "kind": "节日" },
+    { "name": "端午节", "month": 5, "day": 5, "kind": "节日" },
+    { "name": "七夕节", "month": 7, "day": 7, "kind": "节日" },
+    { "name": "中元节", "month": 7, "day": 15, "kind": "纪念日" },
+    { "name": "中秋节", "month": 8, "day": 15, "kind": "节日" },
+    { "name": "重阳节", "month": 9, "day": 9, "kind": "节日" },
+    { "name": "腊八节", "month": 12, "day": 8, "kind": "节日" },
+    { "name": "除夕", "month": 12, "day": 0, "kind": "节日" }
+  ]
+}

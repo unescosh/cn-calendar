@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=中国日历
+Name[zh_CN]=中国日历
+GenericName=Calendar
+Comment=离线优先的中国桌面日历
+Exec=env CN_CAL_CLI=/opt/cn-calendar/cn_cal_cli /opt/cn-calendar/cn_calendar
+Icon=cn-calendar
+Terminal=false
+Categories=Utility;Calendar;
+StartupNotify=true

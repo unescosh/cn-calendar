@@ -1,0 +1,47 @@
+{
+  "checked_at": "2026-11-09T01:39:20.396813+00:00",
+  "mode": "online-verify",
+  "status": "consistent",
+  "sources": [
+    "https://www.baidu.com/",
+    "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/",
+    "https://raw.githubusercontent.com/"
+  ],
+  "checks": [
+    {
+      "id": "http-date-weekday",
+      "status": "ok",
+      "detail": "3 个 HTTP 源，Date 头 2026-11-09T01:39:16+00:00，权威星期 1，本机星期 1"
+    },
+    {
+      "id": "weekday-continuity",
+      "status": "ok",
+      "detail": "11323 天往返与星期循环检查"
+    },
+    {
+      "id": "holiday-2025",
+      "status": "ok",
+      "detail": "内置 33 条 / 上游 33 条，差异 0 处"
+    },
+    {
+      "id": "holiday-2026",
+      "status": "ok",
+      "detail": "内置 39 条 / 上游 39 条，差异 0 处"
+    },
+    {
+      "id": "holiday-2027",
+      "status": "ok",
+      "detail": "内置 34 条 / 上游 34 条，差异 0 处"
+    },
+    {
+      "id": "festival-sampling",
+      "status": "ok",
+      "detail": "核对 106 条调休日 + 12 个国家级纪念日，问题 0 处"
+    }
+  ],
+  "differences": [],
+  "notes": [
+    "本地 L1/L2/L3 未被联网数据改写",
+    "仅 L4 调休写入缓存供核心覆盖"
+  ]
+}

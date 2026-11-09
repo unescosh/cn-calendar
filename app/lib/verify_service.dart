@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'resource_policy.dart';
 import 'update_service.dart';
 
 class VerifySummary {
@@ -9,12 +10,16 @@ class VerifySummary {
     required this.checkedAt,
     required this.checks,
     required this.differences,
+    this.dataChanged = false,
   });
 
   final String status;
   final DateTime checkedAt;
   final List<String> checks;
   final List<String> differences;
+
+  /// 本轮是否写入了新的 L4 调休文件；为 true 时界面需清空月份缓存重新取数。
+  final bool dataChanged;
 
   String get label {
     switch (status) {
@@ -28,25 +33,42 @@ class VerifySummary {
   }
 }
 
-/// 启动时的静默核对，契约见 docs/数据核对规范.md。
+/// 启动时的静默核对，契约见 docs/数据核对规范.md、docs/资源占用规范.md。
 ///
-/// 顺序：先同步 L4 上游数据到缓存 → 用 HTTP Date 头核对日期/星期基准 →
-/// 让 Rust 核心做星期连续性与快照差异比对 → 写 verify-report.json。
+/// 顺序：定期校准节流判断 → 同步 L4 上游数据到缓存 → 用 HTTP Date 头核对
+/// 日期/星期基准 → 让 Rust 核心做星期连续性与快照差异比对 → 写报告。
 /// 全程不 await 首屏；任何网络失败按 offline 处理，不弹窗、不阻塞。
+/// 命中校准缓存时零网络请求、零 CLI 进程，直接复用上次报告，
+/// 但 `differences` 状态仍会显示，差异不会被静默吞掉。
+/// `run(force: true)` 是用户主动「立即校准」：跳过节流，走完整核对。
 class VerifyService {
-  const VerifyService({required this.cacheDir, required this.cliPath});
+  const VerifyService({
+    required this.cacheDir,
+    required this.cliPath,
+    this.policy = const ResourcePolicy(),
+  });
 
   final Directory cacheDir;
   final String cliPath;
+  final ResourcePolicy policy;
 
   static const List<String> _dateSources = <String>[
     'https://www.gov.cn/',
     'https://www.baidu.com/',
   ];
 
-  Future<VerifySummary> run() async {
-    await UpdateService(cacheDir).syncQuietly();
+  Future<VerifySummary> run({bool force = false}) async {
     final DateTime now = DateTime.now().toUtc();
+    final File reportFile = File(
+        '${cacheDir.path}${Platform.pathSeparator}verify-report.json');
+    if (!force) {
+      final VerifySummary? cached = _cachedSummary(reportFile, now);
+      if (cached != null) {
+        return cached;
+      }
+    }
+
+    final bool dataChanged = await UpdateService(cacheDir).syncQuietly();
     final List<Map<String, String>> checks = <Map<String, String>>[];
     final List<Map<String, String>> diffs = <Map<String, String>>[];
     bool online = false;
@@ -90,7 +112,7 @@ class VerifyService {
       });
     }
 
-    // 2) 本地公历/星期算法自洽（断网也跑）
+    // 2) 本地公历/星期算法自洽（断网也跑，但每天最多一轮）
     final dynamic weekday = await _cliJson(<String>['verify', 'weekday']);
     if (weekday is Map<String, dynamic>) {
       final bool ok = weekday['consistent'] == true;
@@ -164,7 +186,54 @@ class VerifyService {
       differences: realDiffs
           .map((Map<String, String> d) => '${d['id']}: ${d['detail']}')
           .toList(),
+      dataChanged: dataChanged,
     );
+  }
+
+  /// 校准间隔内且报告可解析 → 直接复用，零网络、零 CLI 进程。
+  /// 跨年与系统时钟回拨不放行，必须重新核对。
+  VerifySummary? _cachedSummary(File file, DateTime now) {
+    try {
+      if (!file.existsSync()) {
+        return null;
+      }
+      final dynamic decoded = jsonDecode(file.readAsStringSync());
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+      final DateTime? last =
+          DateTime.tryParse(decoded['checked_at'] as String? ?? '');
+      if (last == null) {
+        return null;
+      }
+      final String status = decoded['status'] as String? ?? 'offline';
+      // offline 报告用较短的重试间隔：联网恢复后尽快补一次权威日期核对。
+      // 跨年（内置 L4 快照按年组织）或系统时钟回拨，一律强制重跑。
+      if (policy.needsRecheck(last, now) ||
+          policy.shouldRun(last, now, policy.intervalFor(status))) {
+        return null;
+      }
+      final List<dynamic> checks =
+          decoded['checks'] as List<dynamic>? ?? <dynamic>[];
+      final List<dynamic> diffs =
+          decoded['differences'] as List<dynamic>? ?? <dynamic>[];
+      return VerifySummary(
+        status: status,
+        checkedAt: last,
+        checks: checks
+            .map((dynamic c) => c is Map<String, dynamic>
+                ? '[${c['status']}] ${c['id']}: ${c['detail']}'
+                : '$c')
+            .toList(),
+        differences: diffs
+            .map((dynamic d) => d is Map<String, dynamic>
+                ? '${d['id']}: ${d['detail']}'
+                : '$d')
+            .toList(),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   List<FileSystemEntity> _holidayFiles() {

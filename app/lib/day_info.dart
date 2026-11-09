@@ -1,6 +1,11 @@
 /// DayInfo 的 Dart 映射，字段与 docs/数据规范.md 及 cn_cal_cli 输出严格一致。
 /// 这里只做反序列化与展示派生，不做任何日期计算——计算全在 Rust 核心。
 
+/// 界面配色分类。口径：补班 > 法定假期 > 周末 > 工作日，
+/// 与核心「补班日 > 法定休 > 周末 > 工作日」的合并优先级一致。
+/// 只用于显示，不参与任何日期计算。
+enum DayKind { workday, weekend, holiday, makeup }
+
 class CalendarLabel {
   const CalendarLabel({
     required this.name,
@@ -116,5 +121,20 @@ class DayInfo {
       return '班';
     }
     return rest ? '休' : '';
+  }
+
+  /// 颜色分类：法定假期以核心给出的 L4 假名判定，普通周末按 rest 判定，
+  /// 补班日优先（周末上班要单独标出来）。国家级纪念日由界面另行压色。
+  DayKind get dayKind {
+    if (makeup) {
+      return DayKind.makeup;
+    }
+    if (holidayName != null) {
+      return DayKind.holiday;
+    }
+    if (rest) {
+      return DayKind.weekend;
+    }
+    return DayKind.workday;
   }
 }

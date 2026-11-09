@@ -102,9 +102,15 @@ jobs:
         working-directory: app
         run: flutter test
 
+  # 2026-06 起 GitHub 把 windows-latest / windows-2025 默认镜像切到 VS 2026 (18.x)。
+  # Flutter 3.22 的 cmakeGenerator 只认 17 -> "Visual Studio 17 2022"，遇到 18
+  # 会落到 default -> "Visual Studio 16 2019"，CMake 随即报
+  # "could not find any instance of Visual Studio"。设 CMAKE_GENERATOR 无效，
+  # 因为 Flutter 是显式传 -G 的。固定 windows-2022（VS 2022 17.14）是
+  # GitHub 官方给出的缓解方案（actions/runner-images#14017），也避免 latest 漂移。
   build-windows:
     needs: [data-and-core, flutter-analyze]
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -113,6 +119,16 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
           cache: true
+      - name: 确认构建机是 VS 2022（Flutter 3.22 只认 17）
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -format json -products * -utf8 -latest | ConvertFrom-Json
+          $major = $vs.installationVersion.Split('.')[0]
+          Write-Host "Visual Studio: $($vs.displayName) / $($vs.installationVersion) / major=$major"
+          if ($major -ne '17') {
+            throw "Flutter 3.22 需要 VS 2022 (17.x)，当前 major=$major。请检查 runs-on 是否为 windows-2022。"
+          }
       - name: 生成 Windows runner
         working-directory: app
         run: flutter create --platforms=windows --project-name cn_calendar --org cn.calendar .

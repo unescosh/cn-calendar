@@ -3,8 +3,8 @@ Type=Application
 Name=中国日历
 Name[zh_CN]=中国日历
 GenericName=Calendar
-Comment=离线优先的中国桌面日历
-Exec=env CN_CAL_CLI=/opt/cn-calendar/cn_cal_cli /opt/cn-calendar/cn_calendar
+Comment=离线优先的中国桌面日历（法定节假日、调休、节气、农历、国家级纪念日）
+Exec=/usr/bin/cn-calendar
 Icon=cn-calendar
 Terminal=false
 Categories=Utility;Calendar;

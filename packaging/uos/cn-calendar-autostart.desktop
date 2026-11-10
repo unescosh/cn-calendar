@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=中国日历（开机自启）
+Name[zh_CN]=中国日历（开机自启）
+Comment=登录桌面后自动启动中国日历
+Exec=/usr/bin/cn-calendar
+Icon=cn-calendar
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

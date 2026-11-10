@@ -268,11 +268,47 @@ UOS 实机初测 81–86 MB / 静止 CPU 1.3%，见 `docs/资源占用规范.md`
 |---|---|---|
 | 1 | 点击任务栏日历/时间弹出的界面就是本软件界面；不必真正替换系统自带日历，效果满足即可 | 采纳「接管入口、不碰系统组件」，方案见 `docs/P2桌面形态方案.md`，**代码待 P2 实现** |
 | 2 | 常驻后台 + 桌面插件；更新不要太频繁，固定/提前定好的数据只需定期校准，但必须精准 | **已落地**：7 天核对、分季节同步、手动立即校准、本地计算不降频 |
-| 3 | 开机自启是必须的，桌面插件也要开机自启 | 采纳，两端标准机制 + 显式开关，**代码待 P2 实现** |
+| 3 | 开机自启是必须的，桌面插件也要开机自启 | **打包级自启已落地**：Win10 `HKCU\...\Run` 开关、UOS `/etc/xdg/autostart` 与免 root 用户级 autostart，均配显式关闭；桌面插件本体与入口接管仍待 P2 |
 | 4 | 颜色区分周末、假期和工作日；一周周日起至周六 | **已落地**：四类配色 + 图例；列序本就是周日起至周六止，已加注释锁死 |
 
 顺带修掉复跑实测暴露的「默认窗口只显示前三周」缺陷：现按当月实际行数动态铺满一屏。
 完整对照、两端实现路径与验收方式见 `docs/P2桌面形态方案.md`。
+
+## 安装包与开机自启（2026-11-09 17:57）
+
+新版界面在 UOS 20 实机确认后，本轮把「能跑的程序」做成「能装的成品」。
+CI 仍是 7 个 job，新增两道**只打包不编译**的工序与两个 artifact：
+
+| artifact | 内容 | 开机自启 |
+|---|---|---|
+| `cn-calendar-windows-portable` | Windows Release 目录 + `cn_cal_cli.exe` + 自启开关 + README 压成 zip | `enable-autostart.bat` / `disable-autostart.bat`，写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，仅当前用户、无需管理员 |
+| `cn-calendar-uos20-deb` | `/opt/cn-calendar/`（Debian 10 重编 runner + musl 静态 CLI + `lib/` + `data/`）、`/usr/bin/cn-calendar`、应用菜单项与 SVG 图标 | `/etc/xdg/autostart/cn-calendar.desktop`，XDG 标准登录自启 |
+
+deb 由 `packaging/uos/build_deb.sh` 用 `dpkg-deb` 组装；包内二进制仍来自
+glibc ≤ 2.28 的 Debian 10 容器，`build-uos20-bundle` 已用 `objdump -T`
+断言 runner 最高 glibc 符号不超过 2.28。`build_deb.sh` 自身也会断言
+bundle 内必须有 `cn_cal_cli`，缺了直接失败。CI 打包后用 `dpkg-deb -I`
+与 `dpkg-deb -c` 校验主程序、静态 CLI、启动器、自启项四件套齐全。
+
+打包目录：`packaging/uos/` 含 `build_deb.sh`、`DEBIAN/control`、
+`cn-calendar.desktop`、`cn-calendar-autostart.desktop`、
+`cn-calendar-launcher.sh`、`cn-calendar.svg`、`install-user.sh`、`README.md`；
+`packaging/windows/` 含 `enable-autostart.bat`、`disable-autostart.bat`、`README.txt`。
+`install-user.sh` 是不方便 `sudo` 时的免 root 路径：装到
+`~/.local/share/cn-calendar`，自启写 `~/.config/autostart/`，不改系统目录。
+两端都配显式关闭方式，见 `packaging/uos/README.md`。
+启动脚本显式设置 `CN_CAL_CLI`；Windows 绿色包由
+`CalendarBridge.defaultCliPath()` 取与主程序同目录的 `cn_cal_cli.exe`。
+
+**尚未验收**：两个安装包都未在目标机实机安装。UOS 侧本轮只验证到
+「自启项已落地、用它的 Exec 能弹出窗口」，不重启/注销办公机，
+真正重启自启由用户下次开机确认；Win10 侧绿色包首次运行与资源占用同样待实测。
+给 UOS 的实机指令见本机 `给UOS的第5步_安装验证.txt`（Downloads 目录，不进仓库）。
+
+**P2 仍未实现**：点任务栏时间弹出本软件界面（Win10 托盘 + 鼠标钩子 /
+UOS DDE Dock 插件）、桌面透明挂件、托盘月历、FFI 替换 CLI 桥接。
+方案见 `docs/P2桌面形态方案.md`；本轮只完成打包级自启，
+挂件与入口接管上线时会与主窗口共用同一进程，不新增常驻进程。
 
 ## 已知风险（不得靠推测下结论）
 

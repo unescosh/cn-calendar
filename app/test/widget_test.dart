@@ -442,24 +442,47 @@ void main() {
     });
   });
 
-  group('CalendarMotion：切月动画方向与滚轮一致', () {
-    test('只在切换那一瞬播 220ms，位移 12%，不是常驻动画', () {
+  // 2026-11-10 第六轮：整屏推入。禁止任何淡入 / 透明度叠加，
+  // 也禁止把位移退回小比例（小位移会让两页叠在同一处产生残影）。
+  group('CalendarMotion：整屏推入，两页永不重叠', () {
+    test('220ms，位移是一整屏而非小比例', () {
       expect(CalendarMotion.switchDuration,
           const Duration(milliseconds: 220));
-      expect(CalendarMotion.slideOffsetY(1, incoming: true),
-          closeTo(0.12, 1e-9));
+      expect(CalendarMotion.pageOffset(1, incoming: true), 1.0);
+      expect(CalendarMotion.pageOffset(-1, incoming: true), -1.0);
     });
 
-    test('滚轮下滚去下个月：新页自下入、旧页向上推开', () {
-      expect(CalendarMotion.slideOffsetY(1, incoming: true), greaterThan(0));
-      expect(CalendarMotion.slideOffsetY(1, incoming: false), lessThan(0));
+    test('下滚：新页自下方进、旧页向上推出，首尾精确衔接', () {
+      expect(CalendarMotion.pageOffset(1, incoming: true), greaterThan(0));
+      expect(CalendarMotion.pageOffset(1, incoming: false), lessThan(0));
+      expect(CalendarMotion.pageOffset(1, incoming: false),
+          -CalendarMotion.pageOffset(1, incoming: true));
     });
 
-    test('滚轮上滚回上个月：方向与下滚完全相反', () {
-      expect(CalendarMotion.slideOffsetY(-1, incoming: true),
-          -CalendarMotion.slideOffsetY(1, incoming: true));
-      expect(CalendarMotion.slideOffsetY(-1, incoming: false),
-          -CalendarMotion.slideOffsetY(1, incoming: false));
+    test('上滚与下滚方向完全相反', () {
+      expect(CalendarMotion.pageOffset(-1, incoming: true),
+          -CalendarMotion.pageOffset(1, incoming: true));
+      expect(CalendarMotion.pageOffset(-1, incoming: false),
+          -CalendarMotion.pageOffset(1, incoming: false));
+    });
+
+    test('界面源码里不得出现淡入 / 透明度叠加，且必须是整屏推入', () {
+      final File file = File('lib/main.dart');
+      // flutter test 的 working-directory 是 app/，源文件一定在这里。
+      expect(file.existsSync(), isTrue, reason: '找不到 lib/main.dart');
+      final String text = file.readAsStringSync();
+      expect(text.contains('FadeTransition('), isFalse,
+          reason: '交叉淡入会让两页半透明文字叠成残影');
+      expect(text.contains('AnimatedOpacity('), isFalse,
+          reason: '任何透明度动画都会重新引入残影');
+      expect(text.contains('ClipRect('), isTrue,
+          reason: '必须裁掉滑出可见区的那一页');
+      expect(text.contains('RepaintBoundary('), isTrue,
+          reason: '整屏推入要独立重绘，避免脏矩形残留');
+      expect(text.contains('DecoratedBox('), isTrue,
+          reason: '每页必须垫不透明底');
+      expect(text.contains('switchInCurve: Curves.easeInOut'), isTrue,
+          reason: '曲线必须中心对称，否则两页之间会露缝隙');
     });
   });
 }

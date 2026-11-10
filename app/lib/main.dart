@@ -8,20 +8,23 @@ import 'calendar_bridge.dart';
 import 'day_info.dart';
 import 'verify_service.dart';
 
-/// 切月过渡参数。只在用户翻月的那 220ms 内播放一次，静止时零开销，
-/// 不违反 docs/资源占用规范.md 里「不做常驻动画」的约束。
+/// 切月过渡参数：整屏推入。
+///
+/// 2026-11-10 第四轮的「小位移 + 交叉淡入」在双端实机出现文字残影，
+/// 根因是新旧两页半透明叠加、而格子底色本身也是半透明。第六轮改成
+/// **两页各占一整屏、边界精确衔接、不做任何淡入**：任意时刻可见区域里
+/// 两页首尾相接而不重叠，物理上不可能出现两层文字。
 class CalendarMotion {
   const CalendarMotion._();
 
   static const Duration switchDuration = Duration(milliseconds: 220);
 
-  /// 新页的起始纵向位移（占格子高度的比例）。
-  /// direction = +1 去下个月（滚轮下滚，新页自下方滑入）；
-  /// direction = -1 回上个月（新页自上方滑入）。
-  /// 出场页拿到的是反向动画（1→0），因此 incoming=false 时符号取反，
-  /// 旧页正好被推向新页来的反方向。
-  static double slideOffsetY(int direction, {required bool incoming}) =>
-      0.12 * direction * (incoming ? 1 : -1);
+  /// 新页 / 旧页的起始纵向位移，单位是「自身高度」（1.0 = 一整屏）。
+  /// direction = +1 去下个月：新页自下方整屏外滑入，旧页被推向上方；
+  /// direction = -1 回上个月：方向完全相反。
+  /// 出场页拿到的是反向动画 1→0，begin 取反号即可与入场页首尾衔接。
+  static double pageOffset(int direction, {required bool incoming}) =>
+      (incoming ? 1 : -1) * direction.toDouble();
 }
 
 /// 深色 / 白色两套配色。
@@ -234,10 +237,10 @@ class _CalendarPageState extends State<CalendarPage> {
   int _loadSeq = 0;
   // 一次滚轮手势会连发多个事件，250ms 内只翻一页。
   DateTime? _lastWheel;
-  // 切月过渡方向：+1 去下个月（新页自下方滑入），-1 回上个月（自上方滑入）。
+  // 切月方向：+1 去下个月（新页自下方进），-1 回上个月（自上方进）。
   int _slideDirection = 1;
-  // AnimatedSwitcher 的 key 绑定「真正显示出来的那份数据」，
-  // 避免新月份数据还没到就先播动画、格子里却还留着旧月份。
+  // AnimatedSwitcher 的 key 绑定「真正到位的数据」，避免新月份数据还没到
+  // 就先播动画、格子里却还留着旧月份。
   String _shownMonthKey = '';
 
   CalendarPalette get _palette =>
@@ -287,7 +290,7 @@ class _CalendarPageState extends State<CalendarPage> {
   Future<void> _loadMonth() async {
     final int seq = ++_loadSeq;
     // 只有首屏（还没显示过任何月份）才转圈。换月时保留旧格子，
-    // 等新数据到位再播滑动动画，避免中间闪一下进度圈把过渡打断。
+    // 等新数据到位再播整屏推入，避免中间闪一下进度圈打断过渡。
     if (_shownMonthKey.isEmpty) {
       setState(() {
         _loading = true;
@@ -439,23 +442,36 @@ class _CalendarPageState extends State<CalendarPage> {
         Expanded(
           child: AnimatedSwitcher(
             duration: CalendarMotion.switchDuration,
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeOutCubic,
-            // StackFit.expand 给格子一个紧约束；_buildGrid 用 Column+Expanded
-            // 动态铺满整月，松约束下会报 RenderFlex 的 flex 错误。
+            // 两页必须同步：曲线要关于 (0.5, 0.5) 中心对称，
+            // 否则入场页与出场页速度不同，中间会露出底色缝隙或短暂重叠。
+            // easeOutCubic 不对称，禁止改回去；linear / easeInOut 可以。
+            switchInCurve: Curves.easeInOut,
+            switchOutCurve: Curves.easeInOut,
+            // RepaintBoundary 让整屏推入独立重绘，ClipRect 裁掉滑出
+            // 可见区的那一页，不溢到星期行 / 图例，也不留脏矩形残影。
             layoutBuilder:
-                (Widget? currentChild, List<Widget> previousChildren) => Stack(
-              fit: StackFit.expand,
-              alignment: Alignment.center,
-              children: <Widget>[
-                ...previousChildren,
-                if (currentChild != null) currentChild,
-              ],
+                (Widget? currentChild, List<Widget> previousChildren) =>
+                    RepaintBoundary(
+              child: ClipRect(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    ...previousChildren,
+                    if (currentChild != null) currentChild,
+                  ],
+                ),
+              ),
             ),
             transitionBuilder: _monthTransition,
             child: KeyedSubtree(
               key: ValueKey<String>(_shownMonthKey),
-              child: _buildGrid(),
+              // 每页垫不透明底：即使有亚像素缝隙，也不会透出另一页文字。
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).scaffoldBackgroundColor,
+                ),
+                child: _buildGrid(),
+              ),
             ),
           ),
         ),
@@ -473,27 +489,23 @@ class _CalendarPageState extends State<CalendarPage> {
     );
   }
 
-  /// 新页滑入、旧页被反向推开。
-  /// 用方法 tear-off 传给 AnimatedSwitcher：引用在 State 生命周期内稳定，
-  /// 不会像函数字面量那样每次 rebuild 都被当成「换了 builder」而重建所有过渡。
-  /// dy 在 entry 创建时固化进 Tween，动画播放期间不会被后续滚轮改写。
+  /// 整屏推入：新页与旧页各占一整屏、首尾衔接，没有任何淡入或透明度叠加。
+  /// 用方法 tear-off 传给 AnimatedSwitcher，引用稳定；位移在 entry 创建时
+  /// 固化进 Tween，动画播放期间不会被后续滚轮事件改写。
   Widget _monthTransition(Widget child, Animation<double> animation) {
     // Flutter 3.22 把原始 child 交给 transitionBuilder，key 保持不变；
     // 据此区分入场页与出场页（出场页拿到的是反向动画 1→0）。
     final bool incoming = child.key == ValueKey<String>(_shownMonthKey);
-    final double dy = CalendarMotion.slideOffsetY(
+    final double begin = CalendarMotion.pageOffset(
       _slideDirection,
       incoming: incoming,
     );
-    return FadeTransition(
-      opacity: animation,
-      child: SlideTransition(
-        position: Tween<Offset>(
-          begin: Offset(0, dy),
-          end: Offset.zero,
-        ).animate(animation),
-        child: child,
-      ),
+    return SlideTransition(
+      position: Tween<Offset>(
+        begin: Offset(0, begin),
+        end: Offset.zero,
+      ).animate(animation),
+      child: child,
     );
   }
 

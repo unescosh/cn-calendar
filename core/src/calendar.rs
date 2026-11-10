@@ -33,6 +33,9 @@ pub struct DayInfo {
     pub holiday_name: Option<String>,
     /// 该日是否为调休补班（周末上班）。
     pub makeup: bool,
+    /// 该日是否为某个法定假期的「节日正日」。放假区间内只此一天
+    /// 可以显示节日名，其余日子只是假期，不能也叫这个节。
+    pub festival_day: bool,
 }
 
 fn json_escape(s: &str) -> String {
@@ -95,7 +98,8 @@ impl DayInfo {
             concat!(
                 "{{\"date\":\"{}\",\"weekday\":{},\"workday\":{},\"rest\":{},",
                 "\"labels\":[{}],\"lunar\":{},\"jieqi\":{},\"ganzhi\":{},",
-                "\"shengxiao\":{},\"holiday_name\":{},\"makeup\":{}}}"
+                "\"shengxiao\":{},\"holiday_name\":{},\"makeup\":{},",
+                "\"festival_day\":{}}}"
             ),
             self.date.ymd(),
             self.weekday,
@@ -107,7 +111,8 @@ impl DayInfo {
             json_opt_str(&self.ganzhi),
             json_opt_str(&self.shengxiao),
             json_opt_str(&self.holiday_name),
-            self.makeup
+            self.makeup,
+            self.festival_day
         )
     }
 }
@@ -147,6 +152,26 @@ struct Holiday {
     name: String,
 }
 
+/// 假期名对应的「节日正日」判定规则。
+#[derive(Clone)]
+enum AnchorRule {
+    /// 固定公历月日，如元旦 01-01、国庆节 10-01。
+    Solar { month: u32, day: u32 },
+    /// 农历月日（闰月不算），如春节正月初一、中秋八月十五。
+    Lunar { month: u32, day: u32 },
+    /// 节气当天，如清明节=清明。
+    SolarTerm(String),
+    /// 连休合并假期（如 2025 年上游写作「国庆节、中秋节」）。
+    /// 子项必须是上表登记过的基础锚点，命中任意一个即为正日。
+    Compound(Vec<String>),
+}
+
+#[derive(Clone)]
+struct FestivalAnchor {
+    name: String,
+    rule: AnchorRule,
+}
+
 pub struct Calendar {
     l1: Vec<Memorial>,
     weekday_rules: Vec<WeekdayRule>,
@@ -154,6 +179,7 @@ pub struct Calendar {
     lunar_festivals: Vec<LunarFestival>,
     lunar: LunarTable,
     holidays: BTreeMap<i32, Vec<Holiday>>,
+    anchors: Vec<FestivalAnchor>,
 }
 
 fn req<'a>(v: &'a Value, key: &str, ctx: &str) -> Result<&'a Value, String> {
@@ -181,6 +207,7 @@ impl Calendar {
             lunar_festivals: Vec::new(),
             lunar: LunarTable::parse(data::LUNAR_TABLE)?,
             holidays: BTreeMap::new(),
+            anchors: Vec::new(),
         };
 
         // L1
@@ -243,6 +270,64 @@ impl Calendar {
                 day,
                 kind: str_field(f, "kind", "lunar_festival")?,
             });
+        }
+
+        // L4 假期名 → 节日正日（决定哪一天才可以显示节日名）
+        let anchor_root = json::parse(data::FESTIVAL_ANCHORS)?;
+        for a in req(&anchor_root, "anchors", "festival-anchors")?
+            .as_array()
+            .ok_or("festival-anchors.anchors 应为数组")?
+        {
+            let name = str_field(a, "name", "anchor")?;
+            let typ = str_field(a, "type", "anchor")?;
+            let rule = match typ.as_str() {
+                "solar" | "lunar" => {
+                    let month = int_field(a, "month", "anchor")? as u32;
+                    let day = int_field(a, "day", "anchor")? as u32;
+                    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+                        return Err(format!("节日正日日期非法：{} {}-{}", name, month, day));
+                    }
+                    if typ == "solar" {
+                        AnchorRule::Solar { month, day }
+                    } else {
+                        AnchorRule::Lunar { month, day }
+                    }
+                }
+                "solar_term" => AnchorRule::SolarTerm(str_field(a, "term", "anchor")?),
+                "compound" => {
+                    let raw = req(a, "parts", "anchor")?
+                        .as_array()
+                        .ok_or("compound.parts 应为数组")?;
+                    let mut parts = Vec::new();
+                    for item in raw {
+                        parts.push(
+                            item.as_str()
+                                .map(|s| s.to_string())
+                                .ok_or("compound.parts 含非字符串")?,
+                        );
+                    }
+                    if parts.is_empty() {
+                        return Err(format!("组合正日 {} 的 parts 为空", name));
+                    }
+                    AnchorRule::Compound(parts)
+                }
+                _ => return Err(format!("未知节日正日类型：{}", typ)),
+            };
+            cal.anchors.push(FestivalAnchor { name, rule });
+        }
+        // 组合正日的子项必须指向已登记的基础锚点，且不能自我嵌套。
+        for a in &cal.anchors {
+            if let AnchorRule::Compound(parts) = &a.rule {
+                for p in parts {
+                    let ok = cal
+                        .anchors
+                        .iter()
+                        .any(|x| x.name == *p && !matches!(x.rule, AnchorRule::Compound(_)));
+                    if !ok {
+                        return Err(format!("组合正日 {} 的子项 {} 没有基础锚点", a.name, p));
+                    }
+                }
+            }
         }
 
         // L4 内置快照
@@ -308,6 +393,45 @@ impl Calendar {
     /// 农历/干支数据的实际日期覆盖 [起, 止)，超出后 UI 应优雅降级。
     pub fn lunar_covered_range(&self) -> Option<(Date, Date)> {
         self.lunar.covered_range()
+    }
+
+    /// 上游 L4 的 `name` 在整个放假区间里重复出现（例如 10/1—10/7 都写
+    /// 「国庆节」）。只有命中本表登记的「节日正日」时，界面才可以显示
+    /// 这个节名；未登记的假期名一律不标，宁可少标也不把整段假期叫成节日。
+    fn is_festival_day(
+        &self,
+        name: &str,
+        date: Date,
+        lunar: Option<&LunarInfo>,
+        jieqi: Option<&str>,
+    ) -> bool {
+        self.matches_anchor(name, date, lunar, jieqi, 0)
+    }
+
+    fn matches_anchor(
+        &self,
+        name: &str,
+        date: Date,
+        lunar: Option<&LunarInfo>,
+        jieqi: Option<&str>,
+        depth: u32,
+    ) -> bool {
+        if depth > 2 {
+            return false;
+        }
+        let Some(anchor) = self.anchors.iter().find(|a| a.name == name) else {
+            return false;
+        };
+        match &anchor.rule {
+            AnchorRule::Solar { month, day } => date.month == *month && date.day == *day,
+            AnchorRule::Lunar { month, day } => lunar
+                .map(|li| !li.leap && li.month == *month && li.day == *day)
+                .unwrap_or(false),
+            AnchorRule::SolarTerm(term) => jieqi == Some(term.as_str()),
+            AnchorRule::Compound(parts) => parts
+                .iter()
+                .any(|p| self.matches_anchor(p, date, lunar, jieqi, depth + 1)),
+        }
     }
 
     pub fn day(&self, date: Date) -> DayInfo {
@@ -379,6 +503,13 @@ impl Calendar {
             }
         }
 
+        // 放假区间里只有节日正日可以显示节名。其余日子照样是法定休
+        // （颜色与「休」角标不变），但不能把 10/2 也叫「国庆节」。
+        let festival_day = holiday_name
+            .as_deref()
+            .map(|name| self.is_festival_day(name, date, lunar.as_ref(), jieqi.as_deref()))
+            .unwrap_or(false);
+
         // 优先级：补班 > 法定休 > 周末 > 工作日
         let mut workday = date.weekday() != 0 && date.weekday() != 6;
         if has_makeup {
@@ -389,14 +520,16 @@ impl Calendar {
 
         if has_makeup {
             labels.push(Label { name: "补班".into(), kind: "调休".into(), layer: "L4" });
-        } else if let Some(name) = &holiday_name {
-            // 上游名称可能比 L1/L3 简称更短（如「清明」vs「清明节」），
-            // 同名或互为子串时都不重复出角标。
-            let duplicate = labels.iter().any(|l| {
-                l.name == *name || l.name.contains(name.as_str()) || name.contains(l.name.as_str())
-            });
-            if !duplicate {
-                labels.push(Label { name: name.clone(), kind: "法定假".into(), layer: "L4" });
+        } else if festival_day {
+            if let Some(name) = &holiday_name {
+                // 上游名称可能比 L1/L3 简称更短（如「清明」vs「清明节」），
+                // 同名或互为子串时都不重复出角标。
+                let duplicate = labels.iter().any(|l| {
+                    l.name == *name || l.name.contains(name.as_str()) || name.contains(l.name.as_str())
+                });
+                if !duplicate {
+                    labels.push(Label { name: name.clone(), kind: "法定假".into(), layer: "L4" });
+                }
             }
         }
 
@@ -412,6 +545,7 @@ impl Calendar {
             shengxiao,
             holiday_name,
             makeup: has_makeup,
+            festival_day,
         }
     }
 

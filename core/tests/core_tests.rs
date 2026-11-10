@@ -312,3 +312,61 @@ fn full_range_lunar_continuity_and_invariants() {
     }
     assert!(days > 11_000, "覆盖范围天数异常：{}", days);
 }
+
+/// 上游 holiday-cn 把整个放假区间都写上同一个节名，
+/// 核心必须只在「节日正日」保留节名标签，其余日子只留休/班与配色。
+#[test]
+fn festival_name_only_on_anchor_day() {
+    for date in ["2026-10-01", "2026-10-02", "2026-10-07"] {
+        let info = day(date);
+        assert!(info.rest, "{} 应处于国庆假期", date);
+        assert_eq!(info.holiday_name.as_deref(), Some("国庆节"), "{}", date);
+    }
+    assert!(day("2026-10-01").festival_day, "10/1 是国庆节正日");
+    assert!(day("2026-10-01").has_label("国庆节"));
+    for date in ["2026-10-02", "2026-10-03", "2026-10-07"] {
+        let info = day(date);
+        assert!(!info.festival_day, "{} 不该是节日正日", date);
+        assert!(
+            !info.labels.iter().any(|l| l.name == "国庆节"),
+            "{} 不能把假期里每一天都叫国庆节",
+            date
+        );
+    }
+    assert!(day("2026-09-25").has_label("中秋节"), "中秋正日应有节名");
+    assert!(
+        !day("2026-09-26").labels.iter().any(|l| l.name == "中秋节"),
+        "中秋假期第二天不能再叫中秋节"
+    );
+}
+
+/// 2025 年国庆与中秋连休，上游写作「国庆节、中秋节」，
+/// 两个正日（10/1 国庆、10/6 中秋）都要保住自己的节名。
+#[test]
+fn compound_holiday_has_two_anchor_days() {
+    assert_eq!(
+        day("2025-10-01").holiday_name.as_deref(),
+        Some("国庆节、中秋节")
+    );
+    assert!(day("2025-10-01").festival_day);
+    assert!(day("2025-10-01").has_label("国庆节"));
+    assert!(day("2025-10-06").festival_day);
+    assert!(day("2025-10-06").has_label("中秋节"));
+    assert!(!day("2025-10-03").festival_day);
+    assert!(day("2025-10-03").labels.is_empty());
+}
+
+#[test]
+fn traditional_festivals_are_present() {
+    for (date, name) in [
+        ("2026-02-21", "破五"),
+        ("2026-03-20", "龙抬头"),
+        ("2026-11-09", "寒衣节"),
+        ("2026-11-23", "下元节"),
+        ("2026-12-22", "冬至节"),
+    ] {
+        assert!(day(date).has_label(name), "{} 缺少传统节日 {}", date, name);
+    }
+    // 闰月里的同名农历日不触发传统节日（既有口径不能被新节日破坏）
+    assert!(!day("2025-07-25").labels.iter().any(|l| l.layer == "L3"));
+}

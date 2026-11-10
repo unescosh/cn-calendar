@@ -63,6 +63,7 @@ class DayInfo {
     required this.ganzhi,
     required this.shengxiao,
     required this.holidayName,
+    this.festivalDay = false,
   });
 
   final DateTime date;
@@ -77,6 +78,8 @@ class DayInfo {
   final String? ganzhi;
   final String? shengxiao;
   final String? holidayName;
+  /// 是否法定假期的「节日正日」。放假区间内只有这一天能显示节名。
+  final bool festivalDay;
 
   factory DayInfo.fromJson(Map<String, dynamic> json) {
     final rawLabels = json['labels'] as List<dynamic>? ?? <dynamic>[];
@@ -98,11 +101,16 @@ class DayInfo {
       ganzhi: json['ganzhi'] as String?,
       shengxiao: json['shengxiao'] as String?,
       holidayName: json['holiday_name'] as String?,
+      // 旧版核心没有这个字段，缺省按 false 处理，保证前后兼容。
+      festivalDay: json['festival_day'] as bool? ?? false,
     );
   }
 
   bool get hasNationalMemorial =>
       labels.any((CalendarLabel l) => l.isNationalMemorial);
+
+  /// 格子里显示的是节日/纪念日名称（需要加粗），而不是农历日或节气。
+  bool get hasFestivalLabel => labels.isNotEmpty;
 
   /// 格子里优先显示节日名，其次节气，最后农历日。
   String get primaryText {

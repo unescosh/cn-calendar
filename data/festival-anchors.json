@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "layer": "L4-anchor",
+    "version": 1,
+    "description": "法定假期对应的节日正日。放假区间内只有正日才显示节日名，其余日期只显示休/班角标与配色。",
+    "note": "上游 holiday-cn 的 days[].name 表示「该日属于哪个假期的调休安排」，会在整个放假区间里重复；本表把节日名还原到它真正所属的那一天，避免把 10 月 1—7 日都标成国庆节。",
+    "updated": "2026-11-10"
+  },
+  "anchors": [
+    { "name": "元旦", "type": "solar", "month": 1, "day": 1 },
+    { "name": "春节", "type": "lunar", "month": 1, "day": 1 },
+    { "name": "清明节", "type": "solar_term", "term": "清明" },
+    { "name": "劳动节", "type": "solar", "month": 5, "day": 1 },
+    { "name": "端午节", "type": "lunar", "month": 5, "day": 5 },
+    { "name": "中秋节", "type": "lunar", "month": 8, "day": 15 },
+    { "name": "国庆节", "type": "solar", "month": 10, "day": 1 },
+    { "name": "国庆节、中秋节", "type": "compound", "parts": ["国庆节", "中秋节"] }
+  ]
+}

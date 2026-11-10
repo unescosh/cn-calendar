@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cn_calendar/calendar_bridge.dart';
 import 'package:cn_calendar/day_info.dart';
+import 'package:cn_calendar/main.dart';
 import 'package:cn_calendar/resource_policy.dart';
 
 void main() {
@@ -254,6 +255,61 @@ void main() {
     expect(await bridge.month(2026, 11), same(days));
     bridge.clearCache();
     expect(cache.length, 0);
+  });
+
+  group('节日正日、双主题与核心路径', () {
+    test('festival_day 能解析，旧版核心缺字段时按 false', () {
+      final Map<String, dynamic> base = <String, dynamic>{
+        'date': '2026-10-02',
+        'weekday': 5,
+        'workday': false,
+        'rest': true,
+        'makeup': false,
+        'labels': <Map<String, dynamic>>[],
+        'lunar': null,
+        'jieqi': null,
+        'ganzhi': null,
+        'shengxiao': null,
+        'holiday_name': '国庆节',
+      };
+      final DayInfo modern = DayInfo.fromJson(<String, dynamic>{
+        ...base,
+        'festival_day': true,
+        'labels': <Map<String, dynamic>>[
+          <String, dynamic>{'name': '国庆节', 'kind': '节日', 'layer': 'L1'},
+        ],
+      });
+      expect(modern.festivalDay, isTrue);
+      expect(modern.hasFestivalLabel, isTrue);
+      expect(modern.primaryText, '国庆节');
+
+      final DayInfo legacy = DayInfo.fromJson(base);
+      expect(legacy.festivalDay, isFalse);
+      expect(legacy.hasFestivalLabel, isFalse);
+      // 假期内非正日：没有节名标签，只剩节假日配色依据与「休」角标
+      expect(legacy.dayKind, DayKind.holiday);
+      expect(legacy.badge, '休');
+    });
+
+    test('黑色与白色两套配色的周末数字都改成橙红且互不相同', () {
+      expect(CalendarPalette.dark.restNumber,
+          isNot(CalendarPalette.light.restNumber));
+      expect(CalendarPalette.dark.workdayNumber,
+          isNot(CalendarPalette.dark.restNumber));
+      expect(CalendarPalette.light.workdayNumber,
+          isNot(CalendarPalette.light.restNumber));
+      expect(CalendarPalette.dark.gridLine,
+          isNot(CalendarPalette.light.gridLine));
+    });
+
+    test('子进程环境合并父进程环境，不会丢掉 PATH', () {
+      final Map<String, String>? env =
+          CalendarBridge.childEnvironment('C:/Temp/cn-cal-cache');
+      expect(env, isNotNull);
+      expect(env!['CN_CAL_HOLIDAY_DIR'], 'C:/Temp/cn-cal-cache');
+      expect(env.length, greaterThan(1));
+      expect(CalendarBridge.childEnvironment(null), isNull);
+    });
   });
 }
 

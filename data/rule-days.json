@@ -1,8 +1,10 @@
 {
   "meta": {
     "layer": "L2+L3",
-    "version": 1,
-    "description": "规则型纪念日与农历传统节日规则。全部本地计算，无需联网。"
+    "version": 2,
+    "description": "规则型纪念日与农历传统节日规则。全部本地计算，无需联网。",
+    "updated": "2026-11-10",
+    "note": "v2 补入破五、龙抬头、上巳节、寒衣节、下元节、冬至节。未收录南北日期不一致的小年（腊月廿三/廿四）与规则引擎暂不支持的寒食节（清明前一日），避免给出不精确的日期。"
   },
   "weekday_rules": [
     { "name": "全民国防教育日", "month": 9, "weekday": 6, "nth": 3, "kind": "纪念日", "law": "《中华人民共和国国防教育法》" },
@@ -11,16 +13,22 @@
   ],
   "solar_term_rules": [
     { "name": "清明节", "term": "清明", "kind": "节日" },
-    { "name": "中国农民丰收节", "term": "秋分", "kind": "节日" }
+    { "name": "中国农民丰收节", "term": "秋分", "kind": "节日" },
+    { "name": "冬至节", "term": "冬至", "kind": "节日" }
   ],
   "lunar_festivals": [
     { "name": "春节", "month": 1, "day": 1, "kind": "节日" },
+    { "name": "破五", "month": 1, "day": 5, "kind": "节日" },
     { "name": "元宵节", "month": 1, "day": 15, "kind": "节日" },
+    { "name": "龙抬头", "month": 2, "day": 2, "kind": "节日" },
+    { "name": "上巳节", "month": 3, "day": 3, "kind": "节日" },
     { "name": "端午节", "month": 5, "day": 5, "kind": "节日" },
     { "name": "七夕节", "month": 7, "day": 7, "kind": "节日" },
     { "name": "中元节", "month": 7, "day": 15, "kind": "纪念日" },
     { "name": "中秋节", "month": 8, "day": 15, "kind": "节日" },
     { "name": "重阳节", "month": 9, "day": 9, "kind": "节日" },
+    { "name": "寒衣节", "month": 10, "day": 1, "kind": "节日" },
+    { "name": "下元节", "month": 10, "day": 15, "kind": "节日" },
     { "name": "腊八节", "month": 12, "day": 8, "kind": "节日" },
     { "name": "除夕", "month": 12, "day": 0, "kind": "节日" }
   ]

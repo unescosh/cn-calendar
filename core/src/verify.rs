@@ -2,7 +2,7 @@
 //! 联网由上层（Python 工具 / Dart VerifyService）负责，本模块只读本地数据。
 
 use crate::date::{civil_from_days, Date};
-use crate::json::{self, Value};
+use crate::json;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]

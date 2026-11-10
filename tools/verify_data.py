@@ -60,6 +60,44 @@ def valid_md(md: str, year: int = 2000) -> bool:
 
 
 def main() -> int:
+    # ---- L4 节日正日锚点（放假区间只有正日能显示节名） ----
+    anchors = load("festival-anchors.json")
+    anchor_names: set[str] = set()
+    if anchors:
+        check(anchors.get("meta", {}).get("layer") == "L4-anchor",
+              "festival-anchors meta.layer 应为 L4-anchor")
+        for a in anchors.get("anchors", []):
+            name, typ = a.get("name"), a.get("type")
+            check(bool(name), "锚点存在无名条目")
+            check(typ in {"solar", "lunar", "solar_term", "compound"},
+                  f"锚点类型非法：{name}={typ}")
+            if typ in {"solar", "lunar"}:
+                check(1 <= a.get("month", 0) <= 12, f"锚点月份非法：{name}")
+                check(1 <= a.get("day", 0) <= 31, f"锚点日期非法：{name}")
+                check("term" not in a, f"公历/农历锚点不应带 term：{name}")
+            elif typ == "solar_term":
+                check(a.get("term") in JIEQI_ORDER,
+                      f"锚点引用未知节气：{name}={a.get('term')}")
+            else:
+                parts = a.get("parts", [])
+                check(isinstance(parts, list) and bool(parts),
+                      f"组合正日 {name} 的 parts 为空")
+                check(all(isinstance(p, str) and p for p in parts),
+                      f"组合正日 {name} 的 parts 含非法项")
+            check(name not in anchor_names, f"锚点重复：{name}")
+            anchor_names.add(name)
+        compound_parts = {
+            a.get("name"): a.get("parts", [])
+            for a in anchors.get("anchors", [])
+            if a.get("type") == "compound"
+        }
+        for parent, parts in compound_parts.items():
+            for p in parts:
+                check(p in anchor_names and p not in compound_parts,
+                      f"组合正日 {parent} 的子项 {p} 没有基础锚点")
+        print(f"[锚点] {len(anchor_names)} 个法定假期正日规则，"
+              f"其中组合假期 {len(compound_parts)} 个")
+
     # ---- L1 ----
     l1 = load("memorial-days.json")
     if l1:
@@ -90,10 +128,19 @@ def main() -> int:
         tr = rules.get("solar_term_rules", [])
         for r in tr:
             check(r.get("term") in JIEQI_ORDER, f"节气规则引用未知节气：{r.get('term')}")
+            check(bool(r.get("name")), "节气规则存在无名条目")
+            check(r.get("kind") in VALID_KINDS, f"节气规则 kind 非法：{r.get('name')}")
         lf = rules.get("lunar_festivals", [])
+        seen_fest: set[tuple[int, int]] = set()
         for f in lf:
-            check(1 <= f.get("month", 0) <= 12, f"农历节日月份非法：{f.get('name')}")
-            check(0 <= f.get("day", -1) <= 30, f"农历节日日非法：{f.get('name')}")
+            name = f.get("name")
+            check(bool(name), "农历节日存在无名条目")
+            check(f.get("kind") in VALID_KINDS, f"农历节日 kind 非法：{name}")
+            check(1 <= f.get("month", 0) <= 12, f"农历节日月份非法：{name}")
+            check(0 <= f.get("day", -1) <= 30, f"农历节日日非法：{name}")
+            key = (f.get("month", 0), f.get("day", -1))
+            check(key not in seen_fest, f"农历节日日期重复：{name} {key}")
+            seen_fest.add(key)
         print(f"[L2/L3] {len(wr)} 条星期规则、{len(tr)} 条节气规则、{len(lf)} 条农历节日规则")
 
     # ---- L3 基础表 ----
@@ -156,6 +203,11 @@ def main() -> int:
             by_date.setdefault(ds, set()).add(x.get("isOffDay"))
         conflicts = [k for k, v in by_date.items() if len(v) > 1]
         check(not conflicts, f"{p.name} 同一天同时标休与补班：{conflicts}")
+        # 上游 name 在整个假期里重复；每一个假期名都必须登记正日，
+        # 否则核心不会在该显示节名的那一天显示节名。
+        for n in sorted({x.get("name") for x in days}):
+            check(n in anchor_names,
+                  f"{p.name} 的假期名「{n}」未登记节日正日，界面会漏标节日")
         print(f"[L4] {year} 年 {len(days)} 条调休记录，公告 {len(h.get('papers', []))} 条")
 
     print("-" * 56)

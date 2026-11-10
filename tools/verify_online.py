@@ -233,6 +233,9 @@ def main() -> int:
     if cli and upstream_by_year:
         sampling_issues = 0
         sampled = 0
+        anchor_days = 0
+        anchor_issues = 0
+        anchor_supported = False
         for year, up in upstream_by_year.items():
             # 按月批量取，减少 CLI 进程启动次数
             months = sorted({int(x["date"][5:7]) for x in up["days"]})
@@ -269,6 +272,28 @@ def main() -> int:
                 ):
                     sampling_issues += 1
                     differences.append({"id": "festival_missing", "date": date, "detail": f"本地缺少 {name}"})
+            # 4b) 逐年核对节日正日：放假区间里只有正日可以带节名标签。
+            # 旧版核心没有 festival_day 字段时整段跳过，不误报。
+            for date, local in local_by_date.items():
+                if "festival_day" not in local:
+                    continue
+                anchor_supported = True
+                if local.get("festival_day"):
+                    anchor_days += 1
+                    if not local.get("labels"):
+                        anchor_issues += 1
+                        sampling_issues += 1
+                        differences.append({
+                            "id": "festival_anchor_missing_label",
+                            "date": date,
+                            "detail": "节日正日却没有节名标签",
+                        })
+        if anchor_supported:
+            checks.append({
+                "id": "festival-anchor",
+                "status": "ok" if anchor_issues == 0 else "diff",
+                "detail": f"核对 {anchor_days} 个节日正日，漏标 {anchor_issues} 处",
+            })
         checks.append({
             "id": "festival-sampling",
             "status": "ok" if sampling_issues == 0 else "diff",

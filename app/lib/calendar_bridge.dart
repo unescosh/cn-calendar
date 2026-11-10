@@ -22,14 +22,50 @@ class CalendarBridge {
 
   final MonthCache<List<DayInfo>> _cache;
 
-  /// 优先取与主程序同目录的 CLI（打包后两者放在一起），
-  /// 找不到再退回 PATH，方便开发期直接 `cargo build` 后运行。
+  /// 找计算核心。正常成品包里 CLI 与主程序同目录，一次命中即可。
+  ///
+  /// 旧版 CI 产物 `cn-calendar-windows-x64` 把主程序放在
+  /// `app/build/windows/x64/runner/Release/`，把 CLI 放在
+  /// `core/target/release/`，两者相隔数层；这里向上回溯有限层数并下探
+  /// 这两个约定目录，让误下旧包的用户也能直接跑起来。
+  /// 全部找不到才退回裸名交给 PATH（开发期用法）。
   static String defaultCliPath() {
     final String name = Platform.isWindows ? 'cn_cal_cli.exe' : 'cn_cal_cli';
-    final String sibling =
-        '${File(Platform.resolvedExecutable).parent.path}'
-        '${Platform.pathSeparator}$name';
-    return File(sibling).existsSync() ? sibling : name;
+    final String sep = Platform.pathSeparator;
+    final Directory exeDir = File(Platform.resolvedExecutable).parent;
+    final List<String> candidates = <String>[
+      '${exeDir.path}$sep$name',
+      '${exeDir.path}${sep}data$sep$name',
+    ];
+    // Release → x64 → windows → build → app → 解压根目录 → 上级目录，
+    // 7 层足够覆盖旧 artifact 的 `core/target/release/` 布局。
+    Directory? dir = exeDir;
+    for (int i = 0; i < 7 && dir != null; i++) {
+      candidates.add('${dir.path}$sep$name');
+      candidates.add(
+          '${dir.path}${sep}core${sep}target${sep}release$sep$name');
+      candidates.add('${dir.path}${sep}core${sep}target${sep}debug$sep$name');
+      dir = dir.parent;
+    }
+    for (final String path in candidates) {
+      if (File(path).existsSync()) {
+        return path;
+      }
+    }
+    return name;
+  }
+
+  /// 子进程环境。传 environment 时 Dart 会**整体替换**父进程环境，
+  /// 所以必须把 Platform.environment 一起带上，否则裸名 CLI 会因
+  /// 缺少 PATH 在 Windows 上报「系统找不到指定的文件」。
+  static Map<String, String>? childEnvironment(String? cacheDir) {
+    if (cacheDir == null) {
+      return null; // null = 完整继承父进程环境
+    }
+    return <String, String>{
+      ...Platform.environment,
+      'CN_CAL_HOLIDAY_DIR': cacheDir,
+    };
   }
 
   /// L4 数据变化后调用，避免显示过期的调休安排。
@@ -40,16 +76,23 @@ class CalendarBridge {
     if (hit != null) {
       return hit;
     }
-    final Map<String, String>? env = cacheDir == null
-        ? null
-        : <String, String>{'CN_CAL_HOLIDAY_DIR': cacheDir!};
-    final ProcessResult result = await Process.run(
-      cliPath,
-      <String>['month', '$year', '$month'],
-      environment: env,
-    );
+    late final ProcessResult result;
+    try {
+      result = await Process.run(
+        cliPath,
+        <String>['month', '$year', '$month'],
+        environment: childEnvironment(cacheDir),
+      );
+    } on ProcessException catch (e) {
+      throw StateError(
+        '找不到日历核心：$cliPath\n'
+        '请把 cn_cal_cli.exe 放在 cn_calendar.exe 旁边；'
+        '若被安全软件隔离，请恢复该文件并加信任。\n'
+        '原始错误：${e.message}',
+      );
+    }
     if (result.exitCode != 0) {
-      throw StateError('日历核心执行失败：${result.stderr}');
+      throw StateError('日历核心执行失败（$cliPath）：${result.stderr}');
     }
     final List<dynamic> decoded =
         jsonDecode(result.stdout as String) as List<dynamic>;

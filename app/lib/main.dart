@@ -8,6 +8,22 @@ import 'calendar_bridge.dart';
 import 'day_info.dart';
 import 'verify_service.dart';
 
+/// 切月过渡参数。只在用户翻月的那 220ms 内播放一次，静止时零开销，
+/// 不违反 docs/资源占用规范.md 里「不做常驻动画」的约束。
+class CalendarMotion {
+  const CalendarMotion._();
+
+  static const Duration switchDuration = Duration(milliseconds: 220);
+
+  /// 新页的起始纵向位移（占格子高度的比例）。
+  /// direction = +1 去下个月（滚轮下滚，新页自下方滑入）；
+  /// direction = -1 回上个月（新页自上方滑入）。
+  /// 出场页拿到的是反向动画（1→0），因此 incoming=false 时符号取反，
+  /// 旧页正好被推向新页来的反方向。
+  static double slideOffsetY(int direction, {required bool incoming}) =>
+      0.12 * direction * (incoming ? 1 : -1);
+}
+
 /// 深色 / 白色两套配色。
 /// 周末与法定假期的**日期数字**统一用橙红，比原来的淡蓝清楚得多；
 /// 四类日子的区分仍由背景色承担（周末蓝、假期绿、补班橙）。
@@ -218,6 +234,11 @@ class _CalendarPageState extends State<CalendarPage> {
   int _loadSeq = 0;
   // 一次滚轮手势会连发多个事件，250ms 内只翻一页。
   DateTime? _lastWheel;
+  // 切月过渡方向：+1 去下个月（新页自下方滑入），-1 回上个月（自上方滑入）。
+  int _slideDirection = 1;
+  // AnimatedSwitcher 的 key 绑定「真正显示出来的那份数据」，
+  // 避免新月份数据还没到就先播动画、格子里却还留着旧月份。
+  String _shownMonthKey = '';
 
   CalendarPalette get _palette =>
       widget.darkMode ? CalendarPalette.dark : CalendarPalette.light;
@@ -265,10 +286,14 @@ class _CalendarPageState extends State<CalendarPage> {
 
   Future<void> _loadMonth() async {
     final int seq = ++_loadSeq;
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // 只有首屏（还没显示过任何月份）才转圈。换月时保留旧格子，
+    // 等新数据到位再播滑动动画，避免中间闪一下进度圈把过渡打断。
+    if (_shownMonthKey.isEmpty) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final List<DayInfo> days = await _bridge.month(_year, _month);
       if (!mounted || seq != _loadSeq) {
@@ -276,6 +301,8 @@ class _CalendarPageState extends State<CalendarPage> {
       }
       setState(() {
         _days = days;
+        _shownMonthKey = '$_year-$_month';
+        _error = null;
         _loading = false;
       });
     } catch (e) {
@@ -290,6 +317,7 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   void _shiftMonth(int delta) {
+    _slideDirection = delta > 0 ? 1 : -1;
     setState(() {
       final int total = _year * 12 + (_month - 1) + delta;
       _year = total ~/ 12;
@@ -408,7 +436,29 @@ class _CalendarPageState extends State<CalendarPage> {
     return Column(
       children: <Widget>[
         _buildWeekHeader(),
-        Expanded(child: _buildGrid()),
+        Expanded(
+          child: AnimatedSwitcher(
+            duration: CalendarMotion.switchDuration,
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeOutCubic,
+            // StackFit.expand 给格子一个紧约束；_buildGrid 用 Column+Expanded
+            // 动态铺满整月，松约束下会报 RenderFlex 的 flex 错误。
+            layoutBuilder:
+                (Widget? currentChild, List<Widget> previousChildren) => Stack(
+              fit: StackFit.expand,
+              alignment: Alignment.center,
+              children: <Widget>[
+                ...previousChildren,
+                if (currentChild != null) currentChild,
+              ],
+            ),
+            transitionBuilder: _monthTransition,
+            child: KeyedSubtree(
+              key: ValueKey<String>(_shownMonthKey),
+              child: _buildGrid(),
+            ),
+          ),
+        ),
         _buildLegend(),
         Padding(
           padding: const EdgeInsets.all(8),
@@ -420,6 +470,30 @@ class _CalendarPageState extends State<CalendarPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 新页滑入、旧页被反向推开。
+  /// 用方法 tear-off 传给 AnimatedSwitcher：引用在 State 生命周期内稳定，
+  /// 不会像函数字面量那样每次 rebuild 都被当成「换了 builder」而重建所有过渡。
+  /// dy 在 entry 创建时固化进 Tween，动画播放期间不会被后续滚轮改写。
+  Widget _monthTransition(Widget child, Animation<double> animation) {
+    // Flutter 3.22 把原始 child 交给 transitionBuilder，key 保持不变；
+    // 据此区分入场页与出场页（出场页拿到的是反向动画 1→0）。
+    final bool incoming = child.key == ValueKey<String>(_shownMonthKey);
+    final double dy = CalendarMotion.slideOffsetY(
+      _slideDirection,
+      incoming: incoming,
+    );
+    return FadeTransition(
+      opacity: animation,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: Offset(0, dy),
+          end: Offset.zero,
+        ).animate(animation),
+        child: child,
+      ),
     );
   }
 
@@ -697,6 +771,10 @@ class _CalendarPageState extends State<CalendarPage> {
     if (picked[0] == _year && picked[1] == _month) {
       return;
     }
+    // 跳到未来月份与滚轮下滚同向，跳回过去与上滚同向。
+    final int from = _year * 12 + _month;
+    final int to = picked[0] * 12 + picked[1];
+    _slideDirection = to >= from ? 1 : -1;
     setState(() {
       _year = picked[0];
       _month = picked[1];

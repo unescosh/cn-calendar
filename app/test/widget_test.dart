@@ -441,6 +441,27 @@ void main() {
       expect(empty.primaryText, '');
     });
   });
+
+  group('CalendarMotion：切月动画方向与滚轮一致', () {
+    test('只在切换那一瞬播 220ms，位移 12%，不是常驻动画', () {
+      expect(CalendarMotion.switchDuration,
+          const Duration(milliseconds: 220));
+      expect(CalendarMotion.slideOffsetY(1, incoming: true),
+          closeTo(0.12, 1e-9));
+    });
+
+    test('滚轮下滚去下个月：新页自下入、旧页向上推开', () {
+      expect(CalendarMotion.slideOffsetY(1, incoming: true), greaterThan(0));
+      expect(CalendarMotion.slideOffsetY(1, incoming: false), lessThan(0));
+    });
+
+    test('滚轮上滚回上个月：方向与下滚完全相反', () {
+      expect(CalendarMotion.slideOffsetY(-1, incoming: true),
+          -CalendarMotion.slideOffsetY(1, incoming: true));
+      expect(CalendarMotion.slideOffsetY(-1, incoming: false),
+          -CalendarMotion.slideOffsetY(1, incoming: false));
+    });
+  });
 }
 
 Map<String, dynamic> _baseDayJson(String date) => <String, dynamic>{

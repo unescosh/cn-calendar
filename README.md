@@ -399,6 +399,41 @@ GBK 解析 JSON 失败: UnicodeDecodeError
   md5 仍为 `ce6975d1f87aadce2643b9e7a6b77158`（305 行）
 - **Dart 编译与两端打包仍只认下一轮 CI run**（本机无 Flutter/Dart），不得说「应该能编过」
 
+### 第四轮：滚轮翻月动画（2026-11-10 11:35 追加）
+
+**CI run #10 全绿**（7 jobs / 3m10s / 7 artifacts）；**Win10 绿色包试跑成功**：
+中文不乱码、整月一屏、`2026-11-09` 格子里「寒衣节 / 全国消防日」两行完整可见。
+UOS 回传 `UOS带回Windows_全部资料_含第7步_20261110.zip`（37 个文件）：
+第 7 步寒衣节回归**完全通过**——9 日格子第一行橙红加粗「寒衣节」、第二行
+「全国消防日」，两行不截断、不用点详情；数据层两条 labels 都在；配色、休/班角标、
+整月一屏、图例与「数据核对一致」保持原样；静止 91,992 KB / CPU 1.5%，
+60 秒仍只涨 8 KB。报告结论原文：「可以升级成正式 deb 安装包了」。
+
+用户新增建议：滚轮翻月有效，但希望有符合操作方向的**滑动动画**。
+
+| 改动 | 文件 |
+|---|---|
+| 新增 `CalendarMotion`：一次性 220ms 过渡、位移 12%、方向随滚轮 | `app/lib/main.dart` |
+| `AnimatedSwitcher` + `SlideTransition` + `FadeTransition`；`StackFit.expand` 给动态 `Column+Expanded` 格子紧约束 | `app/lib/main.dart` |
+| `_shownMonthKey` 绑定「真正到位的数据」，避免新月份数据没到就先播动画、格子却还是旧月份 | `app/lib/main.dart` |
+| 换月不再闪进度圈（只有首屏转圈）；连滚时 `_loadSeq` 丢弃中间请求，只播一次 | `app/lib/main.dart` |
+| 点标题跳年月按目标先后决定方向，与滚轮同向 | `app/lib/main.dart` |
+| 新增 3 个 Dart 测试（时长/幅度、下滚方向、上滚反向），总数 **24 → 27** | `app/test/widget_test.dart` |
+| 资源规范补第 8 条：一次性动画 ≠ 常驻动画；补三轮 UOS 复测数据 | `docs/资源占用规范.md` |
+
+方向口径：**下滚 → 去下个月 → 新页自下方滑入、旧页被推向上方**；
+上滚 → 回上个月 → 方向完全相反。`transitionBuilder` 用方法 tear-off 保持
+引用稳定，`dy` 在 entry 创建时固化进 Tween，动画期间不被后续滚轮改写
+（已对 Flutter 3.22 源码确认：builder 收到的是原始 child，key 保持不变）。
+`AnimatedSwitcher` 的 controller 在 220ms 后停在 completed、Ticker 静默，
+静止时不再请求帧；切主题、命中缓存、界面空闲都不播动画。
+
+**本机复验**：Rust 37 测试、`verify_data.py` 2311 项、Dart 词法括号检查；
+项目 / 上传包逐字节一致；三份 `main.yml` 内容未改
+（md5 `ce6975d1f87aadce2643b9e7a6b77158`）。
+**动画的实际观感与 Dart 编译只认下一轮 CI run + 双端实机**，
+本机无 Flutter/Dart，不得说「应该能编过 / 应该好看」。
+
 ## 已知风险（不得靠推测下结论）
 
 1. **UOS 20 图形栈（已实机验证，风险关闭）**：16:37 复跑中 Flutter 窗口正常弹出、

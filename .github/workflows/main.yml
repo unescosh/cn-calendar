@@ -144,6 +144,23 @@ jobs:
           path: |
             app/build/windows/x64/runner/Release/
             core/target/release/cn_cal_cli.exe
+      # 免安装绿色包：把静态 CLI 与自启开关一起放进 Release 目录再压成 zip，
+      # 用户解压后双击 cn_calendar.exe 即可，不需要安装程序。
+      - name: 组装免安装绿色包（含开机自启开关）
+        shell: pwsh
+        run: |
+          $release = 'app/build/windows/x64/runner/Release'
+          Copy-Item 'core/target/release/cn_cal_cli.exe' "$release/cn_cal_cli.exe" -Force
+          Copy-Item 'packaging/windows/enable-autostart.bat' "$release/" -Force
+          Copy-Item 'packaging/windows/disable-autostart.bat' "$release/" -Force
+          Copy-Item 'packaging/windows/README.txt' "$release/" -Force
+          $zip = Join-Path $env:RUNNER_TEMP 'cn-calendar-windows-x64.zip'
+          Compress-Archive -Path "$release/*" -DestinationPath $zip -Force
+          Write-Host "绿色包：$zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cn-calendar-windows-portable
+          path: ${{ runner.temp }}/cn-calendar-windows-x64.zip
 
   # 说明：ubuntu-22.04 的 glibc 2.35 产物不能在 UOS 20（glibc 2.28）运行。
   # 此 job 只验证 Linux 侧代码可编译；面向 UOS 20 的正式包必须在
@@ -270,3 +287,19 @@ jobs:
         with:
           name: cn-calendar-uos20-bundle
           path: app/build/linux/x64/release/bundle/
+      # deb 只是打包（dpkg-deb 不编译），包内二进制已在 Debian 10 /
+      # glibc 2.28 环境构建并实机验证，因此可在 ubuntu-22.04 上组装。
+      - name: 组装 UOS 20 安装包（含开机自启）
+        run: |
+          BUNDLE=app/build/linux/x64/release/bundle
+          DEB="$RUNNER_TEMP/cn-calendar_0.1.0_amd64.deb"
+          bash packaging/uos/build_deb.sh "$BUNDLE" "$DEB"
+          dpkg-deb -I "$DEB"
+          dpkg-deb -c "$DEB" | grep -q 'opt/cn-calendar/cn_calendar'
+          dpkg-deb -c "$DEB" | grep -q 'opt/cn-calendar/cn_cal_cli'
+          dpkg-deb -c "$DEB" | grep -q 'usr/bin/cn-calendar'
+          dpkg-deb -c "$DEB" | grep -q 'etc/xdg/autostart/cn-calendar.desktop'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cn-calendar-uos20-deb
+          path: ${{ runner.temp }}/cn-calendar_0.1.0_amd64.deb

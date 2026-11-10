@@ -112,15 +112,36 @@ class DayInfo {
   /// 格子里显示的是节日/纪念日名称（需要加粗），而不是农历日或节气。
   bool get hasFestivalLabel => labels.isNotEmpty;
 
-  /// 格子里优先显示节日名，其次节气，最后农历日。
+  /// 格子里最多露两个标签，节日 / 国家级纪念日优先于主题日。
+  /// UOS 第 6 步实机反馈：11/9 的「寒衣节」原先被同日 L1
+  /// 「全国消防日」整个挤进详情弹窗，数据没丢但月历上看不到。
+  /// 没有标签时退回节气、农历日。
   String get primaryText {
     if (labels.isNotEmpty) {
-      return labels.first.name;
+      final List<CalendarLabel> sorted = List<CalendarLabel>.of(labels)
+        ..sort((CalendarLabel a, CalendarLabel b) =>
+            _labelPriority(a).compareTo(_labelPriority(b)));
+      return sorted.take(2).map((CalendarLabel l) => l.name).join('\n');
     }
     if (jieqi != null) {
       return jieqi!;
     }
     return lunar?.text ?? '';
+  }
+
+  static int _labelPriority(CalendarLabel l) {
+    switch (l.kind) {
+      case '节日':
+      case '国家级纪念日':
+        return 0;
+      case '法定假':
+      case '调休':
+        return 1;
+      case '纪念日':
+        return 2;
+      default:
+        return 3; // 主题日等
+    }
   }
 
   /// 休 / 班角标；普通工作日不显示。

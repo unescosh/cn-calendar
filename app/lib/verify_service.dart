@@ -268,7 +268,14 @@ class VerifyService {
 
   Future<dynamic> _cliJson(List<String> args) async {
     try {
-      final ProcessResult result = await Process.run(cliPath, args);
+      final ProcessResult result = await Process.run(
+        cliPath,
+        args,
+        // 与 CalendarBridge 保持同一契约：核心输出 UTF-8，
+        // 中文 Windows 下不能让 systemEncoding(GBK) 解码。
+        stdoutEncoding: utf8,
+        stderrEncoding: utf8,
+      );
       if (result.exitCode != 0) {
         return null;
       }

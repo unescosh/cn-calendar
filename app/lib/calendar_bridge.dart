@@ -82,6 +82,11 @@ class CalendarBridge {
         cliPath,
         <String>['month', '$year', '$month'],
         environment: childEnvironment(cacheDir),
+        // Rust 核心输出 UTF-8。中文 Windows 的 systemEncoding 是 GBK，
+        // 用默认值解码会把「丙午」「寒衣节」变成非法字符，
+        // jsonDecode 随即抛 FormatException（Win10 实机截图已复现）。
+        stdoutEncoding: utf8,
+        stderrEncoding: utf8,
       );
     } on ProcessException catch (e) {
       throw StateError(
@@ -94,12 +99,17 @@ class CalendarBridge {
     if (result.exitCode != 0) {
       throw StateError('日历核心执行失败（$cliPath）：${result.stderr}');
     }
-    final List<dynamic> decoded =
-        jsonDecode(result.stdout as String) as List<dynamic>;
-    final List<DayInfo> days = decoded
-        .map((dynamic e) => DayInfo.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final List<DayInfo> days = parseMonth(result.stdout as String);
     _cache.put(year, month, days);
     return days;
+  }
+
+  /// 解析核心的整月 JSON。抽成公开静态方法，让回归测试能直接锁定
+  /// 「UTF-8 中文一个字都不能丢」这条契约，见 [month] 里的 stdoutEncoding。
+  static List<DayInfo> parseMonth(String stdout) {
+    final List<dynamic> decoded = jsonDecode(stdout) as List<dynamic>;
+    return decoded
+        .map((dynamic e) => DayInfo.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 }

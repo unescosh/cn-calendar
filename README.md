@@ -111,13 +111,13 @@ OK: 双实现逐日一致
 data/                      四层日历数据（L1 固定纪念日 / L2 规则 / L3 农历表 / L4 年度调休）
 core/                      Rust 计算核心，零外部依赖
   src/bin/cn_cal_cli.rs     界面桥接与核对命令
-  tests/core_tests.rs       21 个集成测试（含 2020–2050 全范围连续性）
+  tests/core_tests.rs       24 个集成测试（含 2020–2050 全范围连续性、节日正日语义）
 app/                       Flutter 3.22 最小界面（P1 骨架）
 tools/                     数据生成、自洽校验、联网核对
 docs/                      方案定稿、数据规范、核对规范
 packaging/uos/             UOS 20 deb 打包模板与实机验证清单
 reports/                   核对报告与 UOS 实机留档（含机器路径的文件已 .gitignore）
-.github/workflows/ci.yml   CI：数据/核心/联网核对/静态检查/双端构建/UOS 静态核心
+.github/workflows/main.yml CI：数据/核心/联网核对/静态检查/双端构建/UOS 静态核心（仓库里的文件名）
 ```
 
 ## 运行界面（开发期）
@@ -356,7 +356,48 @@ UOS DDE Dock 插件）、桌面透明挂件、托盘月历、FFI 替换 CLI 桥�
 - `tools/verify_online.py` 新增 `festival-anchor` 核对项：正日必须真的带节名标签，
   旧版核心缺 `festival_day` 字段时自动跳过、不误报。
 - **Dart / 界面改动本机无法编译**（无 Flutter/Dart），配色、双主题、滚轮、
-  年月弹窗与 3 个新 Dart 测试只认下一轮 CI run，不得说「应该能编过」。
+  年月弹窗与当轮新增的 3 个 Dart 测试只认 CI run，不得说「应该能编过」。
+  第三轮又补了 5 个测试，见下一节。
+
+### 第三轮修正：Win10 编码坑与同格双标签（2026-11-10 傍晚）
+
+用户反馈「两个 exe 已在同一文件夹，Win10 打开 `cn_calendar.exe` 仍旧失效」。
+本机复现后确认根因与**文件路径无关**：Rust 核心输出 UTF-8，而中文 Windows 下
+Dart `Process.run` 默认按 `systemEncoding`（GBK）解码 stdout，「丙午」「寒衣节」
+等多字节中文变成非法字符，`jsonDecode` 抛 `FormatException`，界面白屏。
+本机复现输出：
+
+```text
+原始字节数: 367
+按 UTF-8 解码: {"date":"2026-11-09",...,"labels":[{"name":"全国消防日"...
+按 GBK 解码直接抛错: 'gbk' codec can't decode byte 0xa5 in position 94
+UTF-8 解析 JSON: OK -> 丙午 马
+GBK 解析 JSON 失败: UnicodeDecodeError
+```
+
+| 改动 | 文件 |
+|---|---|
+| 两处 `Process.run` 显式 `stdoutEncoding: utf8, stderrEncoding: utf8` | `app/lib/calendar_bridge.dart`、`app/lib/verify_service.dart` |
+| 整月 JSON 解析抽成 `CalendarBridge.parseMonth(String)`，便于回归测试 | `app/lib/calendar_bridge.dart` |
+| `primaryText` 最多露两个标签，按 节日/国家级纪念日 > 法定假/调休 > 纪念日 > 主题日 排序 | `app/lib/day_info.dart` |
+| 界面原本已有 `maxLines: 2`，两行标签无需再改布局 | `app/lib/main.dart` |
+| 新增 5 个 Dart 测试：两处显式 UTF-8、中文不丢字、双标签优先级、三标签截断、退回节气/农历 | `app/test/widget_test.dart` |
+
+同时修掉 UOS 第 6 步唯一遗留：`2026-11-09` 格子里现在同时显示「寒衣节」与
+「全国消防日」，不必再点进详情弹窗。用户回传的
+`UOS带回Windows_全部报告与截图_20261110.zip`（34 个文件）结论为
+「8 条验收 7 条完全通过，可以升级成正式 deb 安装包」，资源仍稳定
+（静止 70 秒 RSS 89,852 KB / CPU 1.6%，60 秒只涨 8 KB）。
+
+**本机复验（本轮）**：
+
+- `cargo test --offline`：**37 个测试全绿**（12 单元 + 24 集成 + 1 doctest）
+- `tools/verify_data.py`：**2311 项校验全部通过**
+- `python -m py_compile` 两个校验脚本通过；5 个 Dart 文件词法级括号平衡检查通过
+- `widget_test.dart` 测试数 **19 → 24**
+- 项目与 `日历_上传包` **54 / 54 文件逐字节一致**；三份 `main.yml` 内容未改，
+  md5 仍为 `ce6975d1f87aadce2643b9e7a6b77158`（305 行）
+- **Dart 编译与两端打包仍只认下一轮 CI run**（本机无 Flutter/Dart），不得说「应该能编过」
 
 ## 已知风险（不得靠推测下结论）
 

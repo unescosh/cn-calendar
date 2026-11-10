@@ -1,5 +1,6 @@
 // 故意占用这个文件名：CI 里 `flutter create --platforms=... .` 若发现
 // test/widget_test.dart 不存在，会生成引用模板 MyApp 的默认测试，导致 analyze 变红。
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -311,7 +312,150 @@ void main() {
       expect(CalendarBridge.childEnvironment(null), isNull);
     });
   });
+
+  // Win10 实机：两个 exe 同目录仍打不开，报 FormatException。根因是 Rust
+  // 核心输出 UTF-8，而中文 Windows 下 Process.run 默认按 systemEncoding
+  // （GBK）解码 stdout，「丙午」「寒衣节」变成非法字符，jsonDecode 随即抛错。
+  // 这组测试把「显式 utf8」和「中文一个字不丢」两条契约钉死。
+  group('Win10 UTF-8 契约与同格双标签', () {
+    test('两处 Process.run 都显式指定 UTF-8 解码', () {
+      const List<String> sources = <String>[
+        'lib/calendar_bridge.dart',
+        'lib/verify_service.dart',
+      ];
+      for (final String path in sources) {
+        final File file = File(path);
+        // flutter test 的 working-directory 是 app/，源文件一定在这里。
+        expect(file.existsSync(), isTrue, reason: '找不到 $path');
+        final String text = file.readAsStringSync();
+        expect(text.contains('stdoutEncoding: utf8'), isTrue,
+            reason: '$path 缺少 stdoutEncoding: utf8');
+        expect(text.contains('stderrEncoding: utf8'), isTrue,
+            reason: '$path 缺少 stderrEncoding: utf8');
+      }
+    });
+
+    test('UTF-8 字节流解析后中文标签、干支、生肖都不丢', () {
+      final Map<String, dynamic> entry = <String, dynamic>{
+        ..._baseDayJson('2026-11-09'),
+        'labels': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'name': '全国消防日',
+            'kind': '主题日',
+            'layer': 'L1',
+          },
+          <String, dynamic>{
+            'name': '寒衣节',
+            'kind': '节日',
+            'layer': 'L3',
+          },
+        ],
+        'ganzhi': '丙午',
+        'shengxiao': '马',
+      };
+      // 模拟 Process.run 拿到的原始字节：只有按 UTF-8 解码才还原得出中文。
+      final List<int> bytes = utf8.encode(jsonEncode(<dynamic>[entry]));
+      final List<DayInfo> days =
+          CalendarBridge.parseMonth(utf8.decode(bytes));
+      expect(days, hasLength(1));
+      expect(days[0].labels.map((CalendarLabel l) => l.name).toList(),
+          <String>['全国消防日', '寒衣节']);
+      expect(days[0].ganzhi, '丙午');
+      expect(days[0].shengxiao, '马');
+    });
+
+    test('同日节日排在主题日前，两个标签都露在格子里', () {
+      final DayInfo info = DayInfo.fromJson(<String, dynamic>{
+        ..._baseDayJson('2026-11-09'),
+        'labels': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'name': '全国消防日',
+            'kind': '主题日',
+            'layer': 'L1',
+          },
+          <String, dynamic>{
+            'name': '寒衣节',
+            'kind': '节日',
+            'layer': 'L3',
+          },
+        ],
+      });
+      // UOS 第 6 步实机反馈：以前「寒衣节」被挤进详情弹窗，月历上看不到。
+      expect(info.primaryText, '寒衣节\n全国消防日');
+      expect(info.primaryText.split('\n'), hasLength(2));
+    });
+
+    test('三个以上标签仍只露两个，节日与国家级纪念日优先', () {
+      final DayInfo info = DayInfo.fromJson(<String, dynamic>{
+        ..._baseDayJson('2026-09-30'),
+        'labels': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'name': '某主题日',
+            'kind': '主题日',
+            'layer': 'L1',
+          },
+          <String, dynamic>{
+            'name': '烈士纪念日',
+            'kind': '国家级纪念日',
+            'layer': 'L1',
+          },
+          <String, dynamic>{
+            'name': '某纪念日',
+            'kind': '纪念日',
+            'layer': 'L2',
+          },
+          <String, dynamic>{
+            'name': '某节日',
+            'kind': '节日',
+            'layer': 'L3',
+          },
+        ],
+      });
+      final List<String> shown = info.primaryText.split('\n');
+      expect(shown, hasLength(2));
+      expect(shown, contains('烈士纪念日'));
+      expect(shown, contains('某节日'));
+      expect(shown, isNot(contains('某主题日')));
+    });
+
+    test('没有标签时退回节气，再退回农历日', () {
+      const Map<String, dynamic> lunar = <String, dynamic>{
+        'month': 10,
+        'day': 15,
+        'leap': false,
+        'month_days': 30,
+        'text': '十月十五',
+      };
+      final DayInfo jieqi = DayInfo.fromJson(<String, dynamic>{
+        ..._baseDayJson('2026-11-22'),
+        'jieqi': '小雪',
+        'lunar': lunar,
+      });
+      expect(jieqi.primaryText, '小雪');
+      final DayInfo lunarOnly = DayInfo.fromJson(<String, dynamic>{
+        ..._baseDayJson('2026-11-23'),
+        'lunar': lunar,
+      });
+      expect(lunarOnly.primaryText, '十月十五');
+      final DayInfo empty = DayInfo.fromJson(_baseDayJson('2026-11-24'));
+      expect(empty.primaryText, '');
+    });
+  });
 }
+
+Map<String, dynamic> _baseDayJson(String date) => <String, dynamic>{
+      'date': date,
+      'weekday': 1,
+      'workday': true,
+      'rest': false,
+      'makeup': false,
+      'labels': <Map<String, dynamic>>[],
+      'lunar': null,
+      'jieqi': null,
+      'ganzhi': null,
+      'shengxiao': null,
+      'holiday_name': null,
+    };
 
 DayInfo _sampleDay() {
   return DayInfo.fromJson(<String, dynamic>{

@@ -132,6 +132,15 @@ jobs:
       - name: 生成 Windows runner
         working-directory: app
         run: flutter create --platforms=windows --project-name cn_calendar --org cn.calendar .
+      # P2 第 1 步：托盘常驻 + 接管任务栏时间点击。
+      # runner 由 flutter create 动态生成，因此用补丁脚本精确插入 4 处字符串
+      # 并追加 1 个 .cpp，绝不覆盖 Flutter 3.22 模板文件。脚本内每步都有断言，
+      # 模板一旦变化会明确报错，不会静默产出「没打上补丁」的 exe。
+      - name: 接入 P2 托盘与任务栏时间接管
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process Bypass -Force
+          & ./packaging/p2/windows/apply_p2_patch.ps1
       - name: 构建 CLI
         working-directory: core
         run: cargo build --release --offline --bin cn_cal_cli

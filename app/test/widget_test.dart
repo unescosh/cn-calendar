@@ -485,6 +485,54 @@ void main() {
           reason: '曲线必须中心对称，否则两页之间会露缝隙');
     });
   });
+
+  group('P2 第 1 步：Win10 托盘与时间接管的源码契约', () {
+    test('runner 补丁的三个文件齐全，原生能力都在', () {
+      const String dir = '../packaging/p2/windows';
+      final File header = File('$dir/cn_calendar_p2.h');
+      final File cpp = File('$dir/cn_calendar_p2.cpp');
+      final File patch = File('$dir/apply_p2_patch.ps1');
+      expect(header.existsSync(), isTrue,
+          reason: 'P2 头文件缺失，build-windows 补丁会失败');
+      expect(cpp.existsSync(), isTrue,
+          reason: 'P2 实现缺失，build-windows 补丁会失败');
+      expect(patch.existsSync(), isTrue,
+          reason: '补丁脚本缺失，build-windows 会红');
+      final String c = cpp.readAsStringSync();
+      expect(c.contains('ClaimSingleInstanceOrForward'), isTrue,
+          reason: '必须只允许一个常驻实例');
+      expect(c.contains('AttachMainWindow'), isTrue);
+      expect(c.contains('void Shutdown()'), isTrue,
+          reason: '退出时要卸载钩子并删掉托盘图标');
+      expect(c.contains('WM_CLOSE'), isTrue,
+          reason: '关闭按钮要隐藏到托盘，而不是退出进程');
+      expect(c.contains('SetWindowsHookExW(WH_MOUSE_LL'), isTrue,
+          reason: '任务栏时间接管靠低级鼠标钩子，不做 DLL 注入');
+      expect(c.contains('Shell_NotifyIconW'), isTrue,
+          reason: '钩子被拦时必须有托盘兜底入口');
+    });
+
+    test('补丁脚本四处精确插入并自检，且 CI 已接入', () {
+      final String s =
+          File('../packaging/p2/windows/apply_p2_patch.ps1').readAsStringSync();
+      expect(s.contains('#include "utils.h"'), isTrue);
+      expect(s.contains('flutter::DartProject project(L"data");'), isTrue);
+      expect(s.contains('window.SetQuitOnClose(true);'), isTrue);
+      expect(s.contains('::CoUninitialize();'), isTrue);
+      expect(s.contains('Assert-Contains'), isTrue,
+          reason: '模板一旦变化必须明确报错，不能静默产出未打补丁的 exe');
+      expect(s.contains(r'UTF8Encoding($false)'), isTrue,
+          reason: '必须写 UTF-8 无 BOM，PowerShell 默认 UTF-16 会毁掉 CMake/C++');
+      expect(s.contains('already patched'), isTrue,
+          reason: '必须有防重复打补丁的幂等保护');
+      final String yml =
+          File('../.github/workflows/main.yml').readAsStringSync();
+      expect(yml.contains('apply_p2_patch.ps1'), isTrue,
+          reason: 'build-windows 必须调用补丁脚本');
+      expect(yml.contains('Set-ExecutionPolicy -Scope Process Bypass'), isTrue,
+          reason: '本机默认策略禁止运行 .ps1，CI 步骤必须进程级放行');
+    });
+  });
 }
 
 Map<String, dynamic> _baseDayJson(String date) => <String, dynamic>{

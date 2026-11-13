@@ -151,6 +151,279 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   return CallWindowProcW(g_original_wndproc, hwnd, msg, wp, lp);
 }
 
+// ---------- desktop widget (P2 step 2) ----------
+//
+// The widget is a read-only bitmap mirror of the month grid. Dart renders
+// off-screen (ui.PictureRecorder), writes widget_image.bin, then posts
+// kMsgRefreshWidget through user32!PostMessageW. This side only blits.
+// No JSON parsing, no fonts, no Flutter embedder API, no extra thread:
+// the window lives on the main thread's existing GetMessage loop.
+
+#ifndef WS_EX_NOACTIVATE
+#define WS_EX_NOACTIVATE 0x08000000L
+#endif
+#ifndef LWA_ALPHA
+#define LWA_ALPHA 0x00000002
+#endif
+
+const wchar_t kWidgetClass[] = L"CNCalendar_WidgetHost";
+const wchar_t kWidgetValue[] = L"WidgetEnabled";
+const wchar_t kWidgetImageFile[] = L"widget_image.bin";
+const wchar_t kWidgetHwndFile[] = L"widget_hwnd.txt";
+// Chinese menu label: desktop widget.
+const wchar_t kTextWidget[] = L"\u684C\u9762\u6302\u4EF6";
+
+const UINT kMsgRefreshWidget = WM_APP + 5;  // Dart -> widget
+const UINT kMsgWidgetToggle = WM_APP + 6;   // tray  -> widget
+const UINT kIdWidget = 5;
+
+const DWORD kWidgetMagic = 0x47475743;  // 'CWWG'
+const int kWidgetWidth = 448;
+const int kWidgetHeight = 424;
+
+HWND g_widget = NULL;
+HDC g_widget_dc = NULL;
+HBITMAP g_widget_bitmap = NULL;
+HGDIOBJ g_widget_old = NULL;
+int g_widget_w = 0;
+int g_widget_h = 0;
+volatile bool g_widget_enabled = true;
+
+void AppendWide(wchar_t* dst, size_t cap, const wchar_t* add) {
+  size_t i = 0;
+  while (dst[i] != L'\0' && i + 1 < cap) ++i;
+  size_t j = 0;
+  while (add[j] != L'\0' && i + 1 < cap) dst[i++] = add[j++];
+  dst[i] = L'\0';
+}
+
+// Mirrors cachePath() in main.dart, including the CN_CAL_CACHE_DIR override.
+void GetCacheFilePath(const wchar_t* name, wchar_t* out, size_t cap) {
+  DWORD got = GetEnvironmentVariableW(L"CN_CAL_CACHE_DIR", out,
+                                      static_cast<DWORD>(cap));
+  if (got == 0 || got >= cap) {
+    GetEnvironmentVariableW(L"USERPROFILE", out, static_cast<DWORD>(cap));
+    AppendWide(out, cap, L"\\.cn_calendar\\cache");
+  }
+  AppendWide(out, cap, L"\\");
+  AppendWide(out, cap, name);
+}
+
+void EnsureCacheDir() {
+  wchar_t dir[MAX_PATH] = {};
+  DWORD got = GetEnvironmentVariableW(L"CN_CAL_CACHE_DIR", dir, MAX_PATH);
+  if (got == 0 || got >= MAX_PATH) {
+    GetEnvironmentVariableW(L"USERPROFILE", dir, MAX_PATH);
+    AppendWide(dir, MAX_PATH, L"\\.cn_calendar");
+    CreateDirectoryW(dir, NULL);
+    AppendWide(dir, MAX_PATH, L"\\cache");
+  }
+  CreateDirectoryW(dir, NULL);  // harmless if it already exists
+}
+
+// Dart reads this as a hex string via int.tryParse(..., radix: 16).
+void WriteWidgetHwnd(HWND hwnd) {
+  wchar_t path[MAX_PATH] = {};
+  GetCacheFilePath(kWidgetHwndFile, path, MAX_PATH);
+  ULONG_PTR value = reinterpret_cast<ULONG_PTR>(hwnd);
+  const wchar_t* hex = L"0123456789ABCDEF";
+  char ascii[32] = {};
+  wchar_t reversed[32] = {};
+  int len = 0;
+  if (value == 0) {
+    reversed[len++] = L'0';
+  }
+  while (value != 0 && len < 31) {
+    reversed[len++] = hex[value & 0xF];
+    value >>= 4;
+  }
+  for (int i = 0; i < len; ++i) {
+    ascii[i] = static_cast<char>(reversed[len - 1 - i]);
+  }
+  ascii[len] = '\0';
+  HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE) return;
+  DWORD written = 0;
+  WriteFile(file, ascii, static_cast<DWORD>(len), &written, NULL);
+  CloseHandle(file);
+}
+
+void FreeWidgetBitmap() {
+  if (g_widget_dc != NULL) {
+    if (g_widget_old != NULL) SelectObject(g_widget_dc, g_widget_old);
+    DeleteDC(g_widget_dc);
+    g_widget_dc = NULL;
+  }
+  if (g_widget_bitmap != NULL) {
+    DeleteObject(g_widget_bitmap);
+    g_widget_bitmap = NULL;
+  }
+  g_widget_old = NULL;
+  g_widget_w = 0;
+  g_widget_h = 0;
+}
+
+// File layout: DWORD magic, DWORD width, DWORD height, DWORD reserved,
+// then width*height*4 bytes of BGRA with alpha forced to 255. The whole
+// window translucency comes from SetLayeredWindowAttributes(LWA_ALPHA),
+// so no premultiplied alpha handling is needed here.
+bool LoadWidgetBitmap() {
+  wchar_t path[MAX_PATH] = {};
+  GetCacheFilePath(kWidgetImageFile, path, MAX_PATH);
+  HANDLE file = CreateFileW(path, GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE) return false;
+
+  DWORD head[4] = {};
+  DWORD read = 0;
+  if (!ReadFile(file, head, sizeof(head), &read, NULL) ||
+      read != sizeof(head) || head[0] != kWidgetMagic) {
+    CloseHandle(file);
+    return false;
+  }
+  const int w = static_cast<int>(head[1]);
+  const int h = static_cast<int>(head[2]);
+  if (w <= 0 || h <= 0 || w > 4096 || h > 4096) {
+    CloseHandle(file);
+    return false;
+  }
+  const DWORD pixels = static_cast<DWORD>(w) * static_cast<DWORD>(h) * 4;
+
+  HDC screen = GetDC(NULL);
+  if (screen == NULL) {
+    CloseHandle(file);
+    return false;
+  }
+  BITMAPINFO bi = {};
+  bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bi.bmiHeader.biWidth = w;
+  bi.bmiHeader.biHeight = -h;  // negative = top-down rows
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;
+  bi.bmiHeader.biCompression = BI_RGB;
+  void* bits = NULL;
+  HBITMAP bitmap =
+      CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+  ReleaseDC(NULL, screen);
+  if (bitmap == NULL || bits == NULL) {
+    if (bitmap != NULL) DeleteObject(bitmap);
+    CloseHandle(file);
+    return false;
+  }
+  DWORD total = 0;
+  const bool ok = ReadFile(file, bits, pixels, &total, NULL) != FALSE &&
+                  total == pixels;
+  CloseHandle(file);
+  if (!ok) {
+    DeleteObject(bitmap);
+    return false;
+  }
+
+  HDC dc = CreateCompatibleDC(NULL);
+  if (dc == NULL) {
+    DeleteObject(bitmap);
+    return false;
+  }
+  HGDIOBJ old = SelectObject(dc, bitmap);
+  FreeWidgetBitmap();
+  g_widget_dc = dc;
+  g_widget_bitmap = bitmap;
+  g_widget_old = old;
+  g_widget_w = w;
+  g_widget_h = h;
+  return true;
+}
+
+LRESULT CALLBACK WidgetWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  if (msg == kMsgRefreshWidget) {
+    if (!g_widget_enabled) return 0;
+    if (LoadWidgetBitmap()) {
+      SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, g_widget_w, g_widget_h,
+                   SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+      InvalidateRect(hwnd, NULL, FALSE);
+    }
+    return 0;
+  }
+  if (msg == kMsgWidgetToggle) {
+    g_widget_enabled = (wp != 0);
+    ShowWindow(hwnd, g_widget_enabled ? SW_SHOW : SW_HIDE);
+    if (g_widget_enabled) {
+      PostMessageW(hwnd, kMsgRefreshWidget, 0, 0);
+    }
+    return 0;
+  }
+  if (msg == WM_PAINT) {
+    PAINTSTRUCT ps = {};
+    HDC hdc = BeginPaint(hwnd, &ps);
+    if (hdc != NULL) {
+      if (g_widget_dc != NULL && g_widget_bitmap != NULL) {
+        BitBlt(hdc, 0, 0, g_widget_w, g_widget_h, g_widget_dc, 0, 0,
+               SRCCOPY);
+      }
+      EndPaint(hwnd, &ps);
+    }
+    return 0;
+  }
+  if (msg == WM_DESTROY) {
+    FreeWidgetBitmap();
+    return 0;
+  }
+  return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void InitWidget() {
+  DWORD enabled = 1;
+  if (ReadDword(kWidgetValue, &enabled)) {
+    g_widget_enabled = (enabled != 0);
+  }
+  EnsureCacheDir();
+
+  WNDCLASSW wc = {};
+  wc.lpfnWndProc = WidgetWndProc;
+  wc.hInstance = GetModuleHandleW(NULL);
+  wc.lpszClassName = kWidgetClass;
+  wc.hbrBackground = NULL;
+  if (RegisterClassW(&wc) == 0 &&
+      GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+    return;
+  }
+
+  RECT work = {};
+  if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
+    work.right = GetSystemMetrics(SM_CXSCREEN);
+    work.bottom = GetSystemMetrics(SM_CYSCREEN);
+  }
+  int x = work.right - kWidgetWidth - 24;
+  int y = work.bottom - kWidgetHeight - 24;
+  if (x < work.left) x = work.left + 8;
+  if (y < work.top) y = work.top + 8;
+
+  g_widget = CreateWindowExW(
+      WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW,
+      kWidgetClass, L"CNCalendar Widget", WS_POPUP, x, y, kWidgetWidth,
+      kWidgetHeight, NULL, NULL, GetModuleHandleW(NULL), NULL);
+  if (g_widget == NULL) return;
+
+  SetLayeredWindowAttributes(g_widget, 0, 216, LWA_ALPHA);
+  SetWindowPos(g_widget, HWND_BOTTOM, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  if (!g_widget_enabled) ShowWindow(g_widget, SW_HIDE);
+  WriteWidgetHwnd(g_widget);
+}
+
+void ShutdownWidget() {
+  FreeWidgetBitmap();
+  if (g_widget != NULL) {
+    DestroyWindow(g_widget);
+    g_widget = NULL;
+  }
+  wchar_t path[MAX_PATH] = {};
+  GetCacheFilePath(kWidgetHwndFile, path, MAX_PATH);
+  DeleteFileW(path);
+}
+
 // ---------- tray host ----------
 
 void ShowTrayMenu() {
@@ -164,6 +437,8 @@ void ShowTrayMenu() {
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   AppendMenuW(menu, MF_STRING | (g_hook_clock ? MF_CHECKED : 0), kIdHook,
               kTextHook);
+  AppendMenuW(menu, MF_STRING | (g_widget_enabled ? MF_CHECKED : 0),
+              kIdWidget, kTextWidget);
   AppendMenuW(menu, MF_STRING | (IsAutostartEnabled() ? MF_CHECKED : 0),
               kIdAutostart, kTextAutostart);
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
@@ -200,6 +475,14 @@ LRESULT CALLBACK TrayHostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_hook_clock = !g_hook_clock;
         g_clock_pending = false;
         WriteDword(kHookValue, g_hook_clock ? 1 : 0);
+        break;
+      case kIdWidget:
+        g_widget_enabled = !g_widget_enabled;
+        WriteDword(kWidgetValue, g_widget_enabled ? 1 : 0);
+        if (g_widget != NULL) {
+          PostMessageW(g_widget, kMsgWidgetToggle,
+                       g_widget_enabled ? 1 : 0, 0);
+        }
         break;
       case kIdAutostart:
         SetAutostart(!IsAutostartEnabled());
@@ -360,6 +643,9 @@ void AttachMainWindow(HWND main_window) {
     RegCloseKey(key);
   }
 
+  // Widget is created on this (main) thread, so WM_PAINT / WM_APP refresh
+  // messages are dispatched by wWinMain's existing GetMessage loop.
+  InitWidget();
   g_thread = CreateThread(NULL, 0, TrayThread, NULL, 0, NULL);
 }
 
@@ -383,6 +669,7 @@ void Shutdown() {
     RegDeleteValueW(key, kHwndValue);
     RegCloseKey(key);
   }
+  ShutdownWidget();
   if (g_mutex != NULL) {
     CloseHandle(g_mutex);
     g_mutex = NULL;

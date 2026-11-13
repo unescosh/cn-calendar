@@ -533,6 +533,84 @@ void main() {
           reason: '本机默认策略禁止运行 .ps1，CI 步骤必须进程级放行');
     });
   });
+
+  group('P2 第 2 步：Win10 桌面挂件的源码契约', () {
+    test('离屏位图发布端：非 Windows 静默跳过，位图与消息契约锁死', () {
+      final File file = File('lib/desktop_widget.dart');
+      expect(file.existsSync(), isTrue);
+      final String s = file.readAsStringSync();
+      expect(s.contains('if (!Platform.isWindows'), isTrue,
+          reason: 'UOS 产物必须完全不受影响');
+      expect(s.contains("ffi.DynamicLibrary.open('user32.dll')"), isTrue);
+      expect(s.contains('PostMessageW'), isTrue,
+          reason: '通知走窗口消息，不碰 Flutter embedder C++ API');
+      expect(s.contains('0x47475743'), isTrue,
+          reason: 'CWWG 位图魔数必须与原生层一致');
+      expect(s.contains('0x8005'), isTrue,
+          reason: 'WM_APP+5 必须与原生层 kMsgRefreshWidget 一致');
+      expect(s.contains('widget_image.bin'), isTrue);
+      expect(s.contains('widget_hwnd.txt'), isTrue);
+      expect(s.contains('rawRgba'), isTrue);
+      expect(s.contains('out[d + 3] = 255'), isTrue,
+          reason: 'alpha 恒 255，整体半透明交给 LWA_ALPHA，无需 premultiply');
+      expect(s.contains('Duration(minutes: 30)'), isTrue,
+          reason: '日期哨兵每 30 分钟只比一次日期字符串');
+      expect(s.contains('FadeTransition') || s.contains('AnimatedOpacity'),
+          isFalse, reason: '挂件不得引入透明度动画');
+    });
+
+    test('主界面只在当月 / 数据变化 / 主题切换 / 跨天时发布一次', () {
+      final String s = File('lib/main.dart').readAsStringSync();
+      expect(s.contains("import 'desktop_widget.dart';"), isTrue);
+      expect(s.contains('DesktopWidget.publish('), isTrue);
+      expect(s.contains('_widgetPalette()'), isTrue);
+      expect(s.contains('if (_year == now.year && _month == now.month)'),
+          isTrue, reason: '翻到别的月份不得反复重画挂件位图');
+      expect(s.contains('DesktopWidget.startDaySentinel'), isTrue);
+      expect(s.contains('_widgetSentinel?.cancel()'), isTrue,
+          reason: '退出时必须取消日期哨兵');
+      expect(s.contains('oldWidget.darkMode != widget.darkMode'), isTrue,
+          reason: '黑白主题切换后挂件要跟着换色');
+      expect(s.contains('palette: _widgetPalette()'), isTrue,
+          reason: '配色只有 CalendarPalette 一份来源');
+    });
+
+    test('原生挂件只读位图、置底分层、可关闭，且不新增线程/定时器/轮询', () {
+      const String dir = '../packaging/p2/windows';
+      final String c = File('$dir/cn_calendar_p2.cpp').readAsStringSync();
+      expect(c.contains('WS_EX_LAYERED'), isTrue);
+      expect(c.contains('WS_EX_NOACTIVATE'), isTrue,
+          reason: '桌面挂件不能抢焦点');
+      expect(c.contains('WS_EX_TRANSPARENT'), isTrue,
+          reason: '鼠标必须穿透到桌面，不能挡住图标');
+      expect(c.contains('HWND_BOTTOM'), isTrue,
+          reason: '挂件置底，返回桌面才看得见');
+      expect(c.contains('SetLayeredWindowAttributes'), isTrue);
+      expect(c.contains('LWA_ALPHA'), isTrue);
+      expect(c.contains('CreateDIBSection'), isTrue);
+      expect(c.contains('BitBlt('), isTrue,
+          reason: '原生层只贴图，不重写一遍月历');
+      expect(c.contains('kMsgRefreshWidget = WM_APP + 5'), isTrue);
+      expect(c.contains('kWidgetMagic = 0x47475743'), isTrue);
+      expect(c.contains('WidgetEnabled'), isTrue,
+          reason: '托盘菜单的开关要持久化');
+      expect(c.contains('InitWidget()'), isTrue);
+      expect(c.contains('ShutdownWidget()'), isTrue,
+          reason: '退出要销毁窗口并删掉失效的 HWND 文件');
+      expect(c.contains('SetTimer('), isFalse,
+          reason: '不做后台定时器');
+      expect(c.contains('CreateThread(NULL, 0, Widget'), isFalse,
+          reason: '挂件复用主线程消息循环，不新增线程');
+      // 本轮刻意不改补丁脚本与工作流：挂件代码放进同一个 cpp，
+      // 网页全选上传不会再次踩隐藏 .github 漏替换的坑。
+      final String patch =
+          File('$dir/apply_p2_patch.ps1').readAsStringSync();
+      expect(patch.contains('cn_calendar_p2.cpp'), isTrue);
+      expect(patch.contains('cn_calendar_p2.h'), isTrue);
+      expect(patch.contains('cn_calendar_widget'), isFalse,
+          reason: '挂件不新增 runner 源文件，补丁脚本保持一字不动');
+    });
+  });
 }
 
 Map<String, dynamic> _baseDayJson(String date) => <String, dynamic>{

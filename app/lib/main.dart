@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'calendar_bridge.dart';
 import 'day_info.dart';
+import 'desktop_widget.dart';
 import 'verify_service.dart';
 
 /// 切月过渡参数：整屏推入。
@@ -239,12 +240,62 @@ class _CalendarPageState extends State<CalendarPage> {
   DateTime? _lastWheel;
   // 切月方向：+1 去下个月（新页自下方进），-1 回上个月（自上方进）。
   int _slideDirection = 1;
+  // 桌面挂件的跨天哨兵：每 30 分钟只比一次日期字符串，日期没变零动作。
+  Timer? _widgetSentinel;
   // AnimatedSwitcher 的 key 绑定「真正到位的数据」，避免新月份数据还没到
   // 就先播动画、格子里却还留着旧月份。
   String _shownMonthKey = '';
 
   CalendarPalette get _palette =>
       widget.darkMode ? CalendarPalette.dark : CalendarPalette.light;
+
+  /// 挂件配色直接取自主界面的 CalendarPalette，颜色只在这一处维护。
+  /// 顺序必须与 DesktopWidget 的 p* 常量一致。
+  List<int> _widgetPalette() {
+    final CalendarPalette p = _palette;
+    return <int>[
+      p.text.value,
+      p.subText.value,
+      p.gridLine.value,
+      p.workdayNumber.value,
+      p.restNumber.value,
+      p.makeupNumber.value,
+      p.nationalNumber.value,
+      p.festivalLabel.value,
+      p.lunarLabel.value,
+      p.weekendBg.value,
+      p.holidayBg.value,
+      p.makeupBg.value,
+      p.badgeRestBg.value,
+      p.badgeRestFg.value,
+      p.badgeMakeupBg.value,
+      p.badgeMakeupFg.value,
+      p.selectedMonthBg.value,
+      p.selectedMonthFg.value,
+    ];
+  }
+
+  /// 桌面挂件固定显示「系统当月」，与主窗口翻到哪个月无关。
+  /// 当月数据已在 MonthCache 里，命中时不会启动 CLI 进程。
+  Future<void> _publishCurrentWidget() async {
+    final DateTime now = DateTime.now();
+    try {
+      final List<DayInfo> days = await _bridge.month(now.year, now.month);
+      if (!mounted) {
+        return;
+      }
+      await DesktopWidget.publish(
+        days: days,
+        year: now.year,
+        month: now.month,
+        dark: widget.darkMode,
+        cacheDir: _cacheDir.path,
+        palette: _widgetPalette(),
+      );
+    } catch (_) {
+      // 挂件是增强能力，任何失败都不得影响主界面。
+    }
+  }
 
   @override
   void initState() {
@@ -258,6 +309,22 @@ class _CalendarPageState extends State<CalendarPage> {
     _bridge = CalendarBridge(cliPath: _cliPath, cacheDir: _cacheDir.path);
     _loadMonth();
     _startVerification();
+    _widgetSentinel = DesktopWidget.startDaySentinel(_publishCurrentWidget);
+  }
+
+  @override
+  void didUpdateWidget(CalendarPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 黑 / 白主题切换后，挂件位图要跟着换色。
+    if (oldWidget.darkMode != widget.darkMode) {
+      unawaited(_publishCurrentWidget());
+    }
+  }
+
+  @override
+  void dispose() {
+    _widgetSentinel?.cancel();
+    super.dispose();
   }
 
   void _startVerification({bool force = false}) {
@@ -283,6 +350,12 @@ class _CalendarPageState extends State<CalendarPage> {
         // 否则「定期校准节流」会让界面显示过期的放假/补班安排。
         _bridge.clearCache();
         await _loadMonth();
+        // 用户正翻在别的月份时，上面的 _loadMonth 不会重画挂件，
+        // 这里补一次，保证新的放假 / 补班安排立刻反映到桌面。
+        final DateTime now = DateTime.now();
+        if (_year != now.year || _month != now.month) {
+          unawaited(_publishCurrentWidget());
+        }
       }
     }());
   }
@@ -308,6 +381,19 @@ class _CalendarPageState extends State<CalendarPage> {
         _error = null;
         _loading = false;
       });
+      // 首屏 / 回到当月 / L4 更新后重取当月：刷新一次桌面挂件。
+      // 翻到别的月份不重画，避免滚轮连翻时反复生成位图。
+      final DateTime now = DateTime.now();
+      if (_year == now.year && _month == now.month) {
+        unawaited(DesktopWidget.publish(
+          days: days,
+          year: _year,
+          month: _month,
+          dark: widget.darkMode,
+          cacheDir: _cacheDir.path,
+          palette: _widgetPalette(),
+        ));
+      }
     } catch (e) {
       if (!mounted || seq != _loadSeq) {
         return;

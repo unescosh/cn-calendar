@@ -2,6 +2,10 @@
 #define CN_CALENDAR_P2_H_
 
 // P2 step 1: Windows 10 tray residency + taskbar clock click takeover.
+// P2 step 2: transparent bottom-most desktop widget. Dart renders the month
+//            off-screen into a bitmap; this module only blits it. The widget
+//            window lives on the main thread's message loop and can be turned
+//            off from the tray menu (HKCU\Software\CNCalendar\WidgetEnabled).
 //
 // Constraints (docs/P2 desktop shape plan):
 //   * No system component is modified, disabled or injected. We only take

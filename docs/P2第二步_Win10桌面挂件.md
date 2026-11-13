@@ -63,7 +63,8 @@ Dart  (启动 / 回到当月 / L4 更新 / 主题切换 / 跨天)
 | 托盘消息 | `WM_APP + 6`（托盘菜单 → 挂件显隐） |
 | HWND 文件 | `widget_hwnd.txt`，十六进制文本，Dart `int.tryParse(radix: 16)` |
 | 位图文件 | `widget_image.bin` |
-| 目录 | `cachePath()`：优先 `CN_CAL_CACHE_DIR`，否则 `%USERPROFILE%\.cn_calendar\cache` |
+| 排障文件 | `widget_status.txt`，每次发布写一行 `时间 \| start \| render-ok \| rgba-ok \| bitmap-ok \| hwnd=… \| posted`；失败时写 `error:…` |
+| 目录 | `cachePath()`：优先 `CN_CAL_CACHE_DIR`，否则 `%USERPROFILE%\.cn_calendar\cache`；**两侧都必须显式用路径字符串拼接** |
 | 配色 | `main.dart` 把 `CalendarPalette` 的 18 个 ARGB 值按固定顺序传入，单一来源 |
 
 alpha 恒 255 是关键：画布第一步就铺满**不透明**底色，整体半透明由
@@ -133,22 +134,78 @@ HWND 文件读不到、Dart FFI 加载失败，`publish()` 一律静默降级，
   复制进 runner 的 cpp/h 是新版本；
 - 三个 P2 源文件纯 ASCII，C++ 括号平衡、函数定义顺序、92 个 Win32/GDI
   调用名逐一核对，无 STL / lambda / 异常 / 新线程 / 定时器；
-- Dart 侧括号平衡、33 个测试计数、新增源码契约静态重放 17/17 + 16/16；
-- Rust 37 测试、`verify_data.py` 2311 项照常通过。
+- Dart 侧括号平衡、**34 个测试**计数、源码契约静态重放全通过；
+- Rust 37 测试、`verify_data.py` 2311 项照常通过；
+- **Win10 实机已验证原生链路**：进程起来后 `widget_hwnd.txt` 有值，
+  `EnumWindows` 能枚举到 `CNCalendar_WidgetHost`（可见、右下角
+  448×424）；往缓存写一张合成 BGRA 位图并 `SendMessageW(WM_APP+5)`，
+  桌面右下角立刻出现该卡片。窗口创建、`HWND_BOTTOM` 的 Z 序、
+  `CreateDIBSection` + `BitBlt`、`LWA_ALPHA` 全部工作正常。
 
 **只认 CI run**：C++ 实际编译 / 链接（尤其 `gdi32.lib`、`user32.lib` 是否
-由 MSVC 默认库带入）、`dart:ffi` 在 Windows runner 上加载 `user32.dll`、
-`ui.PictureRecorder` 离屏渲染与中文字体、`rawRgba` 通道顺序、
-`HWND_BOTTOM` 在 Win10 桌面层级里的实际可见性、托盘菜单开关的真实行为。
-本机无 MSVC / Flutter / Dart，不得说「应该能编过」或「应该看得见」。
+由 MSVC 默认库带入，run #14 之后的新一轮要复核）、`dart:ffi` 在 Windows
+runner 上加载 `user32.dll`、`ui.PictureRecorder` 离屏渲染与中文字体、
+`rawRgba` 通道顺序、托盘菜单开关的真实行为。
+本机无 MSVC / Flutter / Dart，不得说「应该能编过」。
 
 ## 八、遗留与风险
 
-- `HWND_BOTTOM` 依赖 Windows Z 序，若实机发现挂件被桌面壁纸 / 图标盖住，
-  下一步升级为 `SetParent` 到桌面 `WorkerW`（需 `0x052C` 未公开消息 +
-  `EnumWindows`），目前不臆测、不引入。
+- `HWND_BOTTOM` 依赖 Windows Z 序。2026-11-13 已用合成位图在本机实机
+  验证：挂件确实显示在桌面右下角、位于壁纸之上、被其它窗口正常盖住，
+  因此**不需要**升级为 `SetParent` 到桌面 `WorkerW`（需 `0x052C`
+  未公开消息 + `EnumWindows`）。仅保留「Win10 大版本更新后再回归」提醒。
 - 挂件固定 448×424 逻辑像素，未做高 DPI 缩放；高缩放率屏幕上会偏小。
 - 32bpp DIB 用 `BI_RGB`，GDI 忽略像素 alpha，整体半透明只能靠 `LWA_ALPHA`，
   所以做不到「卡片背景半透明而文字完全不透明」的磨砂效果。
 - 双端 24 小时资源曲线、Win10 GUI 资源采样仍未量；桌面挂件上线后应补测。
 - UOS 侧 Dock 插件 ABI 代际（`dde-dock` / `dde-shell`）仍待实机探测。
+
+## 九、第一次实机失败与修复（2026-11-13）
+
+**现象**：用户「没有挂件」。桌面截图只有壁纸和图标，主窗口能正常打开。
+
+**排查证据**（本机直接读文件 / 枚举窗口，未改用户数据）：
+
+| 检查项 | 结果 | 结论 |
+|---|---|---|
+| `%LOCALAPPDATA%\CNCalendar\cn_calendar.exe` | 101,376 字节、`data\app.so` 4,277,168 字节，与解压目录逐字节一致 | 新 exe 与新 Dart 快照都装上了 |
+| `app.so` 字符串 | 含 `widget_image.bin` / `widget_hwnd.txt` / `PostMessageW` / `DesktopWidget` | 新 Dart 代码确实进了产物 |
+| `.cn_calendar\cache\widget_hwnd.txt` | 存在，`'6803DA'` | 原生 `InitWidget()` 创建了窗口 |
+| `.cn_calendar\cache\widget_image.bin` | **不存在**（全盘常见目录搜索也只有 HWND 文件） | Dart 位图发布根本没落盘 |
+| `EnumWindows` | `CNCalendar_WidgetHost` vis=True rect(1383,632,1831,1056) | 窗口在，只是没有图可贴 |
+| 合成位图 + `SendMessageW(0x8005)` | 桌面右下角立即出现卡片 | 原生贴图链路与 Z 序完全正常 |
+
+**根因**：`desktop_widget.dart` 里写成了
+`File('$dir$sep$imageFileName')`，其中 `dir` 是 `Directory` 对象。
+`dart:io` 的 `_Directory.toString()` 实现是
+
+```dart
+String toString() => "Directory: '$path'";
+```
+
+所以实际拼出的文件名是
+`Directory: 'C:\Users\...\cache'\widget_image.bin`，含冒号，在 Windows
+上是非法路径。`writeAsBytesSync` 抛 `FileSystemException`，被 `publish()`
+的 `catch (_)` 静默吞掉——**窗口建好了、位图永远不出现、挂件全透明**。
+这与字体、权限、杀软、DPI、Flutter 版本都无关，纯属路径拼接。
+
+**修复清单**：
+
+1. `app/lib/desktop_widget.dart`：显式用
+   `File('${dir.path}${Platform.pathSeparator}$imageFileName')`；
+   新增 `widget_status.txt`，每次发布留一行 `start | render-ok |
+   rgba-ok | bitmap-ok | hwnd=… | posted`，异常写 `error:类型 内容`，
+   用户把这个小文件发回来即可定位，不用装任何开发工具；
+   HWND 短重试由 6×250ms 放宽到 12×250ms（3 秒封顶）。
+2. `packaging/p2/windows/cn_calendar_p2.cpp`：`InitWidget()` 写完
+   `widget_hwnd.txt` 后自己 `PostMessageW(g_widget, kMsgRefreshWidget)`，
+   兜住「Dart 先写位图、没等到 HWND」的竞态；不新增线程 / 定时器。
+3. `app/test/widget_test.dart`：新增一条路径契约回归测试，锁死
+   「禁止把 `Directory` 对象插进字符串」「必须出现 `dir.path`」
+   「必须有状态文件」「原生必须补一次刷新」。Dart 测试 33 → **34**。
+4. `main.yml` 与 `apply_p2_patch.ps1` **仍然一字不改**，全选覆盖上传即可。
+
+**本机复验口径**：Rust 37 测试、`verify_data.py` 2311 项、Dart 词法括号
+平衡与 34 个测试计数、新增断言静态重放 5/5、原生链路实机贴图成功。
+Dart 实际运行、C++ 重新编译、挂件显示真实月历仍只认下一轮 CI run +
+用户 Win10 实机截图。

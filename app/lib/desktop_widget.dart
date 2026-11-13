@@ -43,6 +43,9 @@ class DesktopWidget {
 
   static const String imageFileName = 'widget_image.bin';
   static const String hwndFileName = 'widget_hwnd.txt';
+  /// 一行式排障记录：实机出问题时用户把这个文件发回来即可定位，
+  /// 不需要装任何开发工具，也不需要在界面上弹错误框。
+  static const String statusFileName = 'widget_status.txt';
 
   // 由 main.dart 的 CalendarPalette 传入，顺序必须与 _widgetPalette() 一致。
   static const int pText = 0;
@@ -94,6 +97,8 @@ class DesktopWidget {
     if (!Platform.isWindows || palette.length != paletteSize) {
       return;
     }
+    // 每一步都留痕：挂件是增强能力，异常一律静默降级，但必须能事后定位。
+    final List<String> trace = <String>['start'];
     try {
       final ui.Image image = await _render(
         days: days,
@@ -103,29 +108,61 @@ class DesktopWidget {
         palette: palette,
         today: DateTime.now(),
       );
+      trace.add('render-ok');
       final ByteData? rgba =
           await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       if (rgba == null) {
+        trace.add('rgba-null');
         return;
       }
+      trace.add('rgba-ok');
       final Uint8List bytes = _toBgra(rgba);
       final Directory dir = Directory(cacheDir);
       if (!dir.existsSync()) {
         dir.createSync(recursive: true);
       }
-      final String sep = Platform.pathSeparator;
-      File('$dir$sep$imageFileName').writeAsBytesSync(bytes, flush: true);
+      // 必须显式取 dir.path！dart:io 的 Directory.toString() 返回
+      // "Directory: '路径'"，把它直接插进字符串会生成带冒号的非法
+      // Windows 路径，writeAsBytesSync 抛 FileSystemException 并被静默吞掉，
+      // 实机表现就是「窗口建好了，widget_image.bin 永远不出现、挂件全透明」。
+      final File imageFile = File(
+          '${dir.path}${Platform.pathSeparator}$imageFileName');
+      imageFile.writeAsBytesSync(bytes, flush: true);
+      trace.add('bitmap-ok ${bytes.length}');
 
       final int? hwnd = await _readHwnd(dir.path);
       if (hwnd == null) {
+        trace.add('hwnd-missing');
         return;
       }
+      trace.add('hwnd=$hwnd');
       final _PostMessageWDart? post = _post;
       if (post != null) {
         post(hwnd, refreshMessage, 0, 0);
+        trace.add('posted');
+      } else {
+        trace.add('ffi-missing');
       }
-    } catch (_) {
+    } catch (e) {
       // 挂件是增强能力；缺字体、缺权限、窗口尚未创建都不得影响主界面。
+      trace.add('error:${e.runtimeType} $e');
+    } finally {
+      _writeStatus(cacheDir, trace.join(' | '));
+    }
+  }
+
+  /// 只写一行状态，不联网、不弹窗、不常驻。写失败也不影响主界面。
+  static void _writeStatus(String cacheDir, String line) {
+    try {
+      final Directory dir = Directory(cacheDir);
+      if (!dir.existsSync()) {
+        dir.createSync(recursive: true);
+      }
+      File('${dir.path}${Platform.pathSeparator}$statusFileName')
+          .writeAsStringSync('${DateTime.now().toIso8601String()} $line\n',
+              flush: true);
+    } catch (_) {
+      // 诊断文件本身写不进去也不影响任何功能。
     }
   }
 
@@ -150,11 +187,12 @@ class DesktopWidget {
   static String _dateKey(DateTime d) => '${d.year}-${d.month}-${d.day}';
 
   /// 原生层在 AttachMainWindow 里写 HWND 文件，可能略晚于 Dart 首屏，
-  /// 所以启动瞬间做几次短重试，不做后台常驻等待。
+  /// 所以启动瞬间做几次短重试（3 秒封顶），不做后台常驻等待。
+  /// 原生窗口创建后也会自己补发一次刷新，双向兜住这个竞态。
   static Future<int?> _readHwnd(String dir) async {
     final File file =
         File('$dir${Platform.pathSeparator}$hwndFileName');
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 12; i++) {
       if (file.existsSync()) {
         final int? value =
             int.tryParse(file.readAsStringSync().trim(), radix: 16);

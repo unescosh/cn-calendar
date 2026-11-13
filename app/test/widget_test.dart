@@ -610,6 +610,28 @@ void main() {
       expect(patch.contains('cn_calendar_widget'), isFalse,
           reason: '挂件不新增 runner 源文件，补丁脚本保持一字不动');
     });
+
+    test('位图落盘回归：必须显式用 dir.path，且原生侧补一次刷新', () {
+      final String s = File('lib/desktop_widget.dart').readAsStringSync();
+      // dart:io 的 Directory.toString() 是 "Directory: 'path'"，直接插值会
+      // 生成带冒号的非法 Windows 路径，位图永远写不出来（P2 第 2 步实机踩坑）。
+      expect(s.contains(r"'$dir$sep$imageFileName'"), isFalse,
+          reason: '禁止把 Directory 对象直接插进文件路径字符串');
+      expect(
+          s.contains(
+              r'${dir.path}${Platform.pathSeparator}$imageFileName'),
+          isTrue,
+          reason: '必须显式取 dir.path 拼接 widget_image.bin');
+      expect(s.contains('widget_status.txt'), isTrue,
+          reason: '实机排障需要一行状态记录，不需要用户装开发工具');
+      expect(s.contains(r'error:${e.runtimeType}'), isTrue,
+          reason: '异常必须留痕，不能继续静默吞掉');
+      final String c =
+          File('../packaging/p2/windows/cn_calendar_p2.cpp')
+              .readAsStringSync();
+      expect(c.contains('PostMessageW(g_widget, kMsgRefreshWidget'), isTrue,
+          reason: '窗口创建后自己补一次刷新，兜住 HWND 文件竞态');
+    });
   });
 }
 

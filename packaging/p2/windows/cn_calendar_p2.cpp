@@ -411,6 +411,12 @@ void InitWidget() {
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
   if (!g_widget_enabled) ShowWindow(g_widget, SW_HIDE);
   WriteWidgetHwnd(g_widget);
+  // Dart may publish the bitmap before this window exists and give up
+  // waiting for the HWND file. Refresh once here so the widget is never
+  // left blank by that race. No new timer / thread is introduced.
+  if (g_widget_enabled) {
+    PostMessageW(g_widget, kMsgRefreshWidget, 0, 0);
+  }
 }
 
 void ShutdownWidget() {

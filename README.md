@@ -383,12 +383,22 @@ X 之后托盘图标仍在、9/30 与休/班角标 / 配色 / 整月一屏 / 滚
 
 **本机已验证**：Flutter 3.22 官方模板完整模拟 `flutter create` + 打补丁
 4/4 通过；三个 P2 源文件纯 ASCII、C++ 括号平衡与 92 个 Win32/GDI 调用名
-逐一核对；Dart 括号平衡、33 个测试计数、新增源码契约 17/17 + 16/16；
+逐一核对；Dart 括号平衡、**34 个测试**计数、源码契约静态重放全通过；
 Rust 37 测试、2311 项数据校验照常通过。
 **只认 CI run 与实机**：C++ 编译 / 链接（gdi32 / user32 是否由默认库带入）、
 `dart:ffi` 加载 `user32.dll`、离屏渲染与中文字体、`rawRgba` 通道顺序、
-`HWND_BOTTOM` 的实际可见性、托盘开关行为。本机无 MSVC / Flutter / Dart，
-不得说「应该能编过」或「应该看得见」。
+托盘开关行为。本机无 MSVC / Flutter / Dart，不得说「应该能编过」。
+
+**2026-11-13 第一次实机「没有挂件」的修复**：本机枚举窗口确认
+`CNCalendar_WidgetHost` 已创建、Z 序正常，但 `widget_image.bin` 从未生成。
+往缓存写一张合成位图并发 `WM_APP+5`，桌面右下角立刻出现卡片，证明原生
+`CreateDIBSection` + `BitBlt` 链路完全正常。根因是 Dart 把 `Directory`
+对象直接插进路径字符串（`Directory.toString()` 会变成
+`Directory: '路径'`，Windows 路径非法），`writeAsBytesSync` 抛异常后被静默
+吞掉。已改为显式 `dir.path`，新增一行式 `widget_status.txt` 排障记录、
+HWND 短重试放宽到 3 秒，并让原生窗口创建后自己补发一次刷新兜住竞态；
+新增一条路径契约回归测试（Dart 33 → 34）。详见
+`docs/P2第二步_Win10桌面挂件.md` 第九节。
 
 完整设计、契约与 8 条验收见 `docs/P2第二步_Win10桌面挂件.md`。
 
